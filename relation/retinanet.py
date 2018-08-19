@@ -17,7 +17,7 @@ class RetinaNet():
     #   saver = tf.train.Saver(tf.global_variables)
     #   saver.restore(sess, checkpoint_path)
     #   sess.close()
-        self.resnet50 = output_50
+#         self.resnet50 = output_50
         self.resnet50 = output_101
 
     def __call__(self, inputs, num_classes, num_anchors=9, scope=None, reuse=None):
