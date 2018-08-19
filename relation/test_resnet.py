@@ -2,7 +2,7 @@ from resnet import *
 slim=tf.contrib.slim
 
 if __name__=='__main__':
-   arg_scope = resnet_arg_scope():
+   arg_scope = resnet_arg_scope()
    with slim.arg_scope(arg_scope):
     output, _ = resnet_v2_50(input_image, is_training=True)
     
