@@ -8,17 +8,17 @@ def relation_net(locations, class_labels, relation_numbers, use_obj=True, use_so
 
     arg_scope = vgg_arg_scope()
     with slim.arg_scope(arg_scope):
-       last_2d, _ = vgg16(input_image, is_training=True)
+       last_conv = vgg16(input_image, is_training=True)
 
     with tf.variable_scope('roi_pooling'):
-        x_u = roi_pooling(last_2d, relationship_location)
+        x_u = roi_pooling(last_conv, relationship_location)
         x_u = tf.reshape(x_u, [x_u.get_shape.as_list()[0], -1])
         x_u = tf.slim.fully_connected(x_u, 4096)
         x_u = tf.slim.fully_connected(x_u, 4096)
         x_u = tf.slim.fully_connected(x_u, 256)        
 
         if use_so:
-            x_so = roi_pooling(last_2d, location)
+            x_so = roi_pooling(last_conv, location)
             x_so = tf.reshape(x_u, [x_so.get_shape.as_list()[0], -1])
 
             x_so = tf.slim.fully_connected(x_so, 4096)
