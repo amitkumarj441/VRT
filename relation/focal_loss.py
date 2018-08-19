@@ -3,6 +3,17 @@ import tensorflow as tf
 
 slim = tf.contrib.slim
 
+def create_one_hot(labels, num_classes, label_index):
+     '''Embedding labels to one-hot form
+     Args:
+         labels: (LongTensor) class labels, sized [#labels,]
+         num_classes: (int) number of classes
+     Return:
+         one_hot_label: (tensor) encoded labels, size [#labels, #classes]
+     '''
+    return slim.one_hot_encoding(label_indexes, num_classes)
+  
+# class loss
 def focal_loss(onehot_labels, cls_preds,
                             alpha=0.25, gamma=2.0, name=None, scope=None):
     """Compute sigmoid focal loss between logits and onehot labels
@@ -34,7 +45,7 @@ def focal_loss(onehot_labels, cls_preds,
                                      name=name, axis=1)
         return losses
 
-
+# bounding box loss
 def regression_loss(pred_boxes, gt_boxes, weights):
     """
     Regression loss (Smooth L1 loss: also known as huber loss)
