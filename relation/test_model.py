@@ -1,4 +1,5 @@
 from resnet import *
+from relation_net import *
 slim=tf.contrib.slim
 
 if __name__=='__main__':
