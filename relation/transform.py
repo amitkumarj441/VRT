@@ -57,7 +57,7 @@ def random_flip(img, boxes):
         xmax = w - boxes[:,0]
         boxes[:,0] = xmin
         boxes[:,2] = xmax
-    return np.array(img), boxes
+    return np.array(img)/255.0, boxes
 
 def random_crop(img, boxes):
     '''Crop the given PIL image to a random size and aspect ratio.
@@ -100,4 +100,4 @@ def random_crop(img, boxes):
     boxes[boxes>1.0]=1.0
 #     boxes[:,0::2].clamp_(min=0, max=w-1)
 #     boxes[:,1::2].clamp_(min=0, max=h-1)
-    return img, boxes
+    return np.array(img)/255.0, boxes
