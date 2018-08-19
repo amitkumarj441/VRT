@@ -8,14 +8,16 @@ class RetinaNet():
     def __init__(self):
         arg_scope = resnet_arg_scope()
         with slim.arg_scope(arg_scope):
-           output, _ = resnet_v2_101(input_image, is_training=True)
+#            output_50, _ = resnet_v2_50(input_image, is_training=True)
+           output_101, _ = resnet_v2_101(input_image, is_training=True)
 
     #   sess=tf.Session()
     #   checkpoint_path = 'resnet_v2_101.ckpt'
     #   saver = tf.train.Saver(tf.global_variables)
     #   saver.restore(sess, checkpoint_path)
     #   sess.close()
-        self.resnet = output
+        self.resnet50 = output_50
+        self.resnet50 = output_101
 
     def __call__(self, inputs, num_classes, num_anchors=9, scope=None, reuse=None):
         """
@@ -27,6 +29,8 @@ class RetinaNet():
         self._num_anchors = num_anchors
         self._scope = scope
         self._reuse = reuse
+        result = []
+        result.append(self.forward(inputs))
         return self.forward(inputs)
 
     def add_fcn_head(self, inputs, output_planes, head_offset):
