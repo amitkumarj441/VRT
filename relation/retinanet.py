@@ -48,8 +48,8 @@ class RetinaNet():
     def forward(self, inputs):
         batch_size = tf.shape(inputs)[0]
         feature_maps = self.resnet
-        loc_predictions = []
-        class_predictions = []
+#         loc_predictions = []
+#         class_predictions = []
 #         for idx, feature_map in enumerate(feature_maps):
         loc_prediction = self.add_fcn_head(feature_map,
                                             self._num_anchors * 4,
@@ -59,8 +59,8 @@ class RetinaNet():
                                               "Class")
         loc_prediction = tf.reshape(loc_prediction, [batch_size, -1, 4])
         class_prediction = tf.reshape(class_prediction, [batch_size, -1, self._num_classes])
-        loc_predictions.append(loc_prediction)
-        class_predictions.append(class_prediction)
-        
-        return tf.concat(loc_predictions, axis=1), tf.concat(class_predictions, axis=1)
+#         loc_predictions.append(loc_prediction)
+#         class_predictions.append(class_prediction)
+        return loc_prediction, class_prediction
+#         return tf.concat(loc_predictions, axis=1), tf.concat(class_predictions, axis=1)
       
