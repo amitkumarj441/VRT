@@ -2,7 +2,7 @@
 
 Creating list of thumbnail files - `thumbanail.py`
 
-Downloadi images according to thumbnail list. Images count could be controlled - `download.py`
+Downloading images according to thumbnail list. Images count could be controlled - `download.py`
 
 Filter corrupt images (actually it provide list and we have to delete files manually) - `filter_images.py` 
 
