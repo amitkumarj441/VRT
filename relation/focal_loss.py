@@ -11,9 +11,7 @@ def create_one_hot(labels, num_classes, label_index):
      Return:
          one_hot_label: (tensor) encoded labels, size [#labels, #classes]
      '''
-    hot = np.zeros(num_classes)
-    one_hot = hot[label_index]=1.0
-    return one_hot
+    return slim.one_hot_encoding(label_indexes, num_classes)
   
 # class loss
 def focal_loss(onehot_labels, cls_preds,
