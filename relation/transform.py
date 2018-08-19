@@ -3,36 +3,43 @@ from PIL import Image
 from pathlib import Path
 from matplotlib import patches, patheffects,pyplot as plt
 
-import torch
-from torch.utils import data
-
 def center_crop(img, boxes, size):
     
     w, h = img.size
     ow, oh = size
     i = int(round(h-oh)/2)
     j = int(round(w-ow)/2)
-    img = img.crop(j, i, j+ow, i+oh)
-    boxes -= torch.Tensor([j,i,j,i])
-    boxes[:,0::2].clamp_(min=0, max=ow-1)
-    boxes[:,1::2].clamp_(min=0, max=oh-1)
-    return img, boxes
+    img = img.crop((j, i, j+ow, i+oh))
+    boxes -= np.array([j,i,j,i])
+    boxes[boxes<0.0]=0.0
+    boxes[boxes>1.0]=1.0
+#     boxes[:,0::2].clamp_(min=0, max=ow-1)
+#     boxes[:,1::2].clamp_(min=0, max=oh-1)
+    return np.array(img)/255.0, boxes
 
-def resize(img, boxes, size, max_size=1000):
-    w,h = img.size
-    if isinstance(size, int):
-        size_min = min(w,h)
-        size_max = max(w,h)
-        sw = sh = float(size)/ size_min
-        if sw*size_max * max_size:
-            sw = sh = float(max_size) / size_max
-        ow = int(w*sw + 0.5)
-        oh = int(h*sh + 0.5)
-    else:
-        ow, oh = size
-        sw = float(ow)/w
-        sh = float(oh)/h
-    return img.resize((ow,oh), Image.BILINEAR), boxes*torch.Tensor([sw,sh,sw,sh])
+def resize(img, boxes, size=[416,416], max_size=1000):
+#     w,h = img.size
+#     if isinstance(size, int):
+#         size_min = min(w,h)
+#         size_max = max(w,h)
+#         sw = sh = float(size)/ size_min
+#         if sw*size_max * max_size:
+#             sw = sh = float(max_size) / size_max
+#         ow = int(w*sw + 0.5)
+#         oh = int(h*sh + 0.5)
+#     else:
+#         ow, oh = size
+#         sw = float(ow)/w
+#         sh = float(oh)/h
+    resized = img.resize((size[0], size[1]))
+    return np.array(resized)/255.0
+#     return img.resize((ow,oh), Image.BILINEAR), boxes*torch.Tensor([sw,sh,sw,sh])
+
+def random_noise(img, boxes):
+    noise = np.random.normal(0, 0.01, [img.size(1), img.size(0), 3])
+    img = np.array(img)/255.0
+    img+=noise
+    return img
 
 def random_flip(img, boxes):
     '''Randomly flip the given PIL Image.
@@ -50,7 +57,7 @@ def random_flip(img, boxes):
         xmax = w - boxes[:,0]
         boxes[:,0] = xmin
         boxes[:,2] = xmax
-    return img, boxes
+    return np.array(img), boxes
 
 def random_crop(img, boxes):
     '''Crop the given PIL image to a random size and aspect ratio.
@@ -88,7 +95,9 @@ def random_crop(img, boxes):
         y = (img.size[1] - h) // 2
 
     img = img.crop((x, y, x+w, y+h))
-    boxes -= torch.Tensor([x,y,x,y])
-    boxes[:,0::2].clamp_(min=0, max=w-1)
-    boxes[:,1::2].clamp_(min=0, max=h-1)
+    boxes -= np.array([x,y,x,y])
+    boxes[boxes<0.0]=0.0
+    boxes[boxes>1.0]=1.0
+#     boxes[:,0::2].clamp_(min=0, max=w-1)
+#     boxes[:,1::2].clamp_(min=0, max=h-1)
     return img, boxes
