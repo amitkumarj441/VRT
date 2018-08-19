@@ -1,5 +1,6 @@
 import tensorflow as tf
-  
+from resnet import *
+
 slim = tf.contrib.slim
 class RetinaNet():
     """ RetinaNet defined in Focal loss paper
