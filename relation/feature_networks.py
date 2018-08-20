@@ -100,24 +100,24 @@ class RoIAlign_withBanks(nn.Module):
             #So you know what? I'm just going to concatenate all three maps because I know it works.
         concatted_attention_maps = tf.concat((pooled_regions_default, pooled_regions_aspectratio, pooled_regions_subregion), axis=1)
         #then, since my model wants the output shape, let's just have a conv reduce the number of features
-        slim_output_maps = self.final_reduction_convs(concatted_attention_maps)
+        slim_output_maps = CoordConv(in_channels = self.out_channels*3, out_channels = self.out_channels, stride = 1, kernel_size = 1, padding = 0, bias = False),
+        slim_output_maps = tf.nn.relu(GroupNorm(slim_output_maps, out_channels))
+        
         return slim_output_maps
-class ShiftedConv(nn.Module):
-    def __init__(self, in_channels, out_channels, offset_x, offset_y, kernel_size = 1, stride = 1, padding = 0, bias = False, groups = 1, dilation = (1,1)):
+    
+    
+def ShiftedConv(x, in_channels, out_channels, offset_x, offset_y, kernel_size = 1, stride = 1, padding = 0, bias = False, groups = 1, dilation = (1,1)):
         '''
         shifts feature map offset_x right and offset_y down before conv-ing.
         for now, just assume integer offsets.
         [][][]but it's really not that hard to do a bilinearly interpolated shift.
         '''
-        super(ShiftedConv, self).__init__()
-        self.offset_x = offset_x
-        self.offset_y = offset_y
-        self.mainconv = CoordConv(in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = groups, dilation = dilation)
-    def forward(self,x):
-        x = tensor_roll(x, self.offset_x, axis=-2)
-        x = tensor_roll(x, self.offset_y, axis=-1)
-        out = self.mainconv(x)
+        x = tensor_roll(x, offset_x, axis=-2)
+        x = tensor_roll(x, offset_y, axis=-1)
+        out = CoordConv(x, in_channels = in_channels, out_channels = out_channels, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = groups, dilation = dilation)
         return out
+    
+    
 def tensor_roll(tensor, shift, axis, wraparound = False, mode = "CONSTANT"):
     '''
     roll tensor. modified from
@@ -139,13 +139,12 @@ def tensor_roll(tensor, shift, axis, wraparound = False, mode = "CONSTANT"):
         shift = dim_size - abs(shift)
     if axis==0:
         before = tensor[:dim_size - shift]
-#     before = tensor.narrow(axis, 0, dim_size - shift)
         after = tensor[after_start: shift]
     if axis==1:
         before = tensor[:, :dim_size - shift]
         after = tensor[:, after_start: shift]
     if axis==2:
-        before = tensor[:, :, "dim_size - shift]
+        before = tensor[:, :, dim_size - shift]
         after = tensor[:, :, after_start: shift]
     if axis==3:
         before = tensor[:, :, :, :dim_size - shift]
@@ -175,6 +174,7 @@ def getTensorPadding(tensor, shift, axis):
         return None
     return padding
 
+                        
 def vectorizedTorchBilinearInterpolationGrid(bboxcoordslist, grid_width, grid_height, use_cuda):
     """
     transform a tensor list of bbox point ranges from x1 to x2 (and y1 to y2) into a WxH bilinear interpolated grid.
@@ -188,10 +188,7 @@ def vectorizedTorchBilinearInterpolationGrid(bboxcoordslist, grid_width, grid_he
     x2 = bboxcoordslist[:, 2:3]
     y1 = bboxcoordslist[:, 1:2]
     y2 = bboxcoordslist[:, 3:4]
-#     if use_cuda:
-#         x_ranges = torch.arange(grid_width).cuda()*(x2-x1)/max(1.,(grid_width-1.)) + x1
-#         y_ranges = torch.arange(grid_height).cuda()*(y2-y1)/max(1.,(grid_height-1.)) + y1
-#     else:
+                        
     x_ranges = np.arange(grid_width)*(x2-x1)/max(1.,(grid_width-1.)) + x1
     y_ranges = np.arange(grid_height)*(y2-y1)/max(1.,(grid_height-1.)) + y1
     #Now for each row in these range lists--that's two Nx7 tensors, where each row is the x1 to x2 or y1 to y2 range corresponding to an example--I want to make a grid out of the x and y values. Numpy has meshgrid. Does torch have something similar?
@@ -199,6 +196,8 @@ def vectorizedTorchBilinearInterpolationGrid(bboxcoordslist, grid_width, grid_he
     bbox_interpolations = tf_combined_meshgrid(x_ranges, y_ranges)
     bbox_interpolations = tf.clip_by_value(bbox_interpolations, 0, 1)
     return bbox_interpolations
+                        
+                        
 def tf_combined_meshgrid(x_ranges, y_ranges):
     """
     convert a NxW x_ranges and a NxH y_ranges into a NxWxHx2 list of coordinate grids.
@@ -295,46 +294,32 @@ def getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmap
     return weighted_sum
 
 ##coordconv
-class CoordConv():
+def CoordConv(x, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 'SAME', bias = False, groups = 1, dilation = (1,1)):
     """
     https://arxiv.org/abs/1807.03247
     convolution, but with appending two x and y coordinate channels before the conv.
     """
-    def __init__(self, in_channels, out_channels, kernel_size = [1,1], stride = 1, padding = 'SAME', bias = False, groups = 1, dilation = (1,1)):
-        super(CoordConv, self).__init__()
-        self.theconv = slim.conv2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
-        self.groups = groups
-        if self.groups > 1:
-            self.dwiseconv_stripxy = nn.Conv2d(in_channels = in_channels + 2, out_channels = in_channels, kernel_size = 1, stride = 1, padding = 0, bias = False)
-    def forward(self,x):
-#         iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
-        x = makeXChannel_andCatIt(x, iscuda)
-        x = makeYChannel_andCatIt(x, iscuda)
-        out = slim.conv2d(x, out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding)
-#         (in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
+    x = makeXChannel_andCatIt(x, iscuda)
+    x = makeYChannel_andCatIt(x, iscuda)
+    out = slim.conv2d(x, out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = 'SAME')
 
-        if self.groups > 1:
-           out = self.dwiseconv_stripxy(out)
-        return out
-class CoordConvTranspose():
-    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
-        super(CoordConvTranspose, self).__init__()
-        self.theconv = nn.ConvTranspose2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, output_padding = output_padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
-        self.groups = groups
-        if self.groups > 1:
-            print("CoordConvTranspose error: unsure how to handle groups > 1. implement.")
-        #    self.dwiseconv_stripxy = nn.ConvTranspose2d(in_channels = in_channels + 2, out_channels = in_channels, kernel_size = 1, stride = 1, padding = 0, output_padding = 0, bias = False)
-    def forward(self,x):
-#         iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
-        x = makeXChannel_andCatIt(x, iscuda)
-        x = makeYChannel_andCatIt(x, iscuda)
-        batch_size = x.shape[0]
-        width = x.shape[0]
-        height = x.shape[0]
-        w = tf.random_normal(shape=[kernel_size,kernel_size, out_channels, in_channels])
-        w = tf.Variable(w)
-        out = tf.nn.conv2d_transpose(x, w, output_shape=[1,stride*width,stride*height,out_channels],strides=[1,strides, strides,1], padding='SAME')
-        return out
+    if groups > 1:
+       out = out = slim.conv2d(x, out_channels = in_channels, kernel_size = [kernel_size, kernel_size], stride = stride, padding = 'SAME')
+    return out
+                        
+
+def CoordConvTranspose(x, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
+                        
+    x = makeXChannel_andCatIt(x, iscuda)
+    x = makeYChannel_andCatIt(x, iscuda)
+    batch_size = x.shape[0]
+    width = x.shape[0]
+    height = x.shape[0]
+    w = tf.random_normal(shape=[kernel_size,kernel_size, out_channels, in_channels])
+    w = tf.Variable(w)
+    out = tf.nn.conv2d_transpose(x, w, output_shape=[1,stride*width,stride*height,out_channels],strides=[1,strides, strides,1], padding='SAME')
+    return out
+                        
 def makeXChannel_andCatIt(mytensor, iscuda):
     dims = mytensor.shape[-2:]
     xdim = dims[0]
@@ -346,11 +331,10 @@ def makeXChannel_andCatIt(mytensor, iscuda):
     #now I want to append this channel onto each example.
     bs = mytensor.shape[0]
     mystack = np.repeat(mychannel.reshape(1,1,xdim,xdim), bs, axis=0)
-    mystack_tensor = torch.tensor(mystack).float()
-    if iscuda:
-        mystack_tensor = mystack_tensor.cuda()
-    out = torch.cat((mytensor, mystack_tensor), dim=1)
+    mystack_tensor = tf.cast(tf.convert_to_tensor(mystack), tf.float32)
+    out = tf.concat((mytensor, mystack_tensor), axis=1)
     return out
+                        
 def makeYChannel_andCatIt(mytensor, iscuda):
     dims = mytensor.shape[-2:]
     ydim = dims[1]
@@ -361,38 +345,35 @@ def makeYChannel_andCatIt(mytensor, iscuda):
     mychannel = np.repeat(myrange.reshape(ydim, 1), ydim, axis=1)
     bs = mytensor.shape[0]
     mystack = np.repeat(mychannel.reshape(1,1,ydim,ydim), bs, axis=0)
-    mystack_tensor = torch.tensor(mystack).float()
-    if iscuda:
-        mystack_tensor = mystack_tensor.cuda()
-    out = torch.cat((mytensor, mystack_tensor), dim=1)
+    mystack_tensor = tf.cast(tf.convert_to_tensor(mystack), tf.float32)
+    out = tf.concat((mytensor, mystack_tensor), axis=1)
     return out
 
 ##GroupNorm
-class GroupNorm():
-    """
-    https://arxiv.org/abs/1803.08494
-    Apparently it's better than batchnorm?
-    https://github.com/kuangliu/pytorch-groupnorm/blob/master/groupnorm.py
-    """
-    def __init__(self, num_features, num_groups=None, eps=1e-5):
-        
-        self.weight = tf.Variable(tf.ones([num_features]))
-        self.bias = tf.Variable(tf.zeros([num_features]))
-        self.num_features = num_features
-        if num_groups is None:
-            self.num_groups = seekGroups(num_features)
-        else:
-            self.num_groups = num_groups
-        self.eps = eps
-    def forward(self, x):
-        [N,H,W,C] = x.get_shape.as_list()
-        G = self.num_groups
-        assert C % G == 0
-        x = tf.reshape(x, [N, G, -1])
-        mean, var = tf.nn.moments(x, axis=-1)
-        x = (x-mean) / tf.sqrt(var+self.eps)
-        x = tf.reshape(x, [N, H, W, C])
-        return x * tf.reshape(self.weight, [1, self.num_features, 1, 1]) + tf.reshape(self.bias, [1, self.num_features, 1, 1])
+# class GroupNorm():
+#     """
+#     https://arxiv.org/abs/1803.08494
+#     Apparently it's better than batchnorm?
+#     https://github.com/kuangliu/pytorch-groupnorm/blob/master/groupnorm.py
+#     """
+#     def __init__(self, num_features, num_groups=None, eps=1e-5):
+def GroupNorm(x, num_features, num_groups=None, eps=1e-6):
+    weight = tf.Variable(tf.ones([num_features]))
+    bias = tf.Variable(tf.zeros([num_features]))
+                        
+    if num_groups is None:
+        num_groups = seekGroups(num_features)
+    else:
+        num_groups = num_groups
+                        
+    [N,H,W,C] = x.get_shape.as_list()
+    G = num_groups
+    assert C % G == 0
+    x = tf.reshape(x, [N, G, -1])
+    mean, var = tf.nn.moments(x, axis=-1)
+    x = (x-mean) / tf.sqrt(var+eps)
+    x = tf.reshape(x, [N, H, W, C])
+    return x * tf.reshape(weight, [1, num_features, 1, 1]) + tf.reshape(bias, [1, num_features, 1, 1])
     
     
 def seekGroups(num_channels, divisors = [8,4,3,2]):
