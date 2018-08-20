@@ -1,8 +1,6 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import tensorflow as tf
 import numpy as np
-
+slim=tf.contrib.slim
 ''' test case. in this case, batch size would be 2.
 testroi = RoIAlign_withBanks().cuda()
 top_absolute_net_locs = torch.tensor([[0.1,0.1,0.3,0.4],[0.,0,0.5,0.5]]).float().cuda()
@@ -68,7 +66,7 @@ class RoIAlign_withBanks(nn.Module):
         #get corresponding fmaps
         map_indices = chooseFeatureMapIndices_fromBboxCoordList_x1y1x2y2(top_absolute_net_locs, len(feature_maps))
         maxfmapsize = feature_maps[min(map_indices)].shape[-1]
-        upscaled_feature_maps_tensor = tf.concat([tf.squeeze(tf.image.resize_image(feature_maps[i], [maxfmapsize, maxfmapsize], method=0), [1]) for i in range(len(feature_maps))], axis=1)
+        upscaled_feature_maps_tensor = tf.concat([tf.exapnd_dims(tf.image.resize_image(feature_maps[i], [maxfmapsize, maxfmapsize], method=0), 1) for i in range(len(feature_maps))], axis=1)
         
         
         squeeze01shape = [upscaled_feature_maps_tensor.shape[0]*upscaled_feature_maps_tensor.shape[1], upscaled_feature_maps_tensor.shape[2], upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
@@ -78,14 +76,14 @@ class RoIAlign_withBanks(nn.Module):
         sr_outshape = (len(self.offsets_list), upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
         subregion_banks = tf.reshape(tf.concat([self.shifted_convs[i](tf.reshape(upscaled_feature_maps_tensor, squeeze01shape)) for i in range(len(self.shifted_convs))]), sr_outshape)
         reduced_default_feature_maps_tensor = tf.reshape(self.default_pool_reduction_conv(tf.reshape(upscaled_feature_maps_tensor, squeeze01shape)), [upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, maxfmapsize, maxfmapsize])
-        selected_fmaps_tensor_default = tf.concat([reduced_default_feature_maps_tensor[which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
+        selected_fmaps_tensor_default = tf.concat([tf.expand_dims(reduced_default_feature_maps_tensor[which_image_ind[i], map_indices[i]], 0) for i in range(len(map_indices))], axis=0)
         pooled_regions_default = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_default, bbox_gridinterpolations, use_cuda)
         ##### now selectively pool the aspect ratio and subregion rois from their tensors
         netloc_dims = top_absolute_net_locs[:,2:] - top_absolute_net_locs[:,0:2]
         netloc_ratios_widthtoheight = tf.where(netloc_dims[:,1] <= 0., netloc_dims[:,0]*0+1, netloc_dims[:,0]/netloc_dims[:,1])
         which_aspectratio_ind = tf.where(netloc_ratios_widthtoheight < self.aspect_ratios[0], 0, tf.where(netloc_ratios_widthtoheight > self.aspect_ratios[1], 2, 1))
             #ratio_banks #torch.Size([3, 2, 6, 40, 38, 38])
-        selected_fmaps_tensor_aspectratio = tf.concat([ratio_banks[which_aspectratio_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
+        selected_fmaps_tensor_aspectratio = tf.concat([tf.expand_dims(ratio_banks[which_aspectratio_ind[i], which_image_ind[i], map_indices[i]], 0) for i in range(len(map_indices))], axis=0)
         pooled_regions_aspectratio = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_aspectratio, bbox_gridinterpolations, use_cuda)
         ##pool again for subregions
         netloc_centers_xy = tf.concat([(top_absolute_net_locs[:,0:1] + top_absolute_net_locs[:,2:3])/2, (top_absolute_net_locs[:,1:2] + top_absolute_net_locs[:,3:4])/2], axis=1)
@@ -94,7 +92,7 @@ class RoIAlign_withBanks(nn.Module):
         which_y_ind = tf.where(netloc_centers_xy[:,1] > 2/3., 2, tf.where(netloc_centers_xy[:,1] < 1/3., 0, 1))
         which_subregion_ind = 3*which_y_ind + which_x_ind
             #subregion_banks #torch.Size([9, 2, 6, 40, 38, 38])
-        selected_fmaps_tensor_subregion = tf.concat([subregion_banks[which_subregion_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
+        selected_fmaps_tensor_subregion = tf.concat([tf.expand_dims(subregion_banks[which_subregion_ind[i], which_image_ind[i], map_indices[i]], 0) for i in range(len(map_indices))], axis=0)
         pooled_regions_subregion = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_subregion, bbox_gridinterpolations, use_cuda)
         ####now combine the subregion and aspect ratio maps
             #paper uses elementwise sum on the aspect ratio and subregion banks.
@@ -120,7 +118,7 @@ class ShiftedConv(nn.Module):
         x = tensor_roll(x, self.offset_y, axis=-1)
         out = self.mainconv(x)
         return out
-def tensor_roll(tensor, shift, axis, wraparound = False, mode = "constant"):
+def tensor_roll(tensor, shift, axis, wraparound = False, mode = "CONSTANT"):
     '''
     roll tensor. modified from
     https://discuss.pytorch.org/t/implementation-of-function-like-numpy-roll/964/5
@@ -130,19 +128,30 @@ def tensor_roll(tensor, shift, axis, wraparound = False, mode = "constant"):
     if shift == 0:
         return tensor
     if axis < 0:
-        axis += tensor.dim()
+        axis += len(tensor.shape)
     if not wraparound: #pad the tensor by shift along the specified dim
         padding = getTensorPadding(tensor, shift, axis)
-        tensor = F.pad(tensor, padding, mode=mode)
-    dim_size = tensor.size(axis)
+        tensor = tf.pad(tensor, padding, mode=mode)
+    dim_size = tensor.shape[axis]
     after_start = dim_size - shift
     if shift < 0:
         after_start = -shift
         shift = dim_size - abs(shift)
-    before = tensor.narrow(axis, 0, dim_size - shift)
-    after = tensor.narrow(axis, after_start, shift)
+    if axis==0:
+        before = tensor[:dim_size - shift]
+#     before = tensor.narrow(axis, 0, dim_size - shift)
+        after = tensor[after_start: shift]
+    if axis==1:
+        before = tensor[:, :dim_size - shift]
+        after = tensor[:, after_start: shift]
+    if axis==2:
+        before = tensor[:, :, "dim_size - shift]
+        after = tensor[:, :, after_start: shift]
+    if axis==3:
+        before = tensor[:, :, :, :dim_size - shift]
+        after = tensor[:, :, :, after_start: shift]
     if wraparound:
-        return torch.cat([after, before], axis)
+        return tf.concat([after, before], axis=axis)
     elif not wraparound:
         if shift_init > 0:
             return before
@@ -151,12 +160,12 @@ def tensor_roll(tensor, shift, axis, wraparound = False, mode = "constant"):
 def getTensorPadding(tensor, shift, axis):
     if shift == 0:
         return (0,0,0,0)
-    if axis == tensor.dim()-1 or axis == -1:
+    if axis == len(tensor.shape)-1 or axis == -1:
         if shift > 0:
             return (abs(shift),0,0,0)
         else:
             return (0,abs(shift),0,0)
-    elif axis == tensor.dim()-2 or axis == -2:
+    elif axis == len(tensor.shape)-2 or axis == -2:
         if shift > 0:
             return (0,0,abs(shift),0)
         else:
