@@ -1,10 +1,10 @@
-from torch.nn.modules.module import Module
+# from torch.nn.modules.module import Module 
 from ..functions.roi_pool import RoIPoolFunction
 
 
-class _RoIPooling(Module):
+class _RoIPooling():
     def __init__(self, pooled_height, pooled_width, spatial_scale):
-        super(_RoIPooling, self).__init__()
+#         super(_RoIPooling, self).__init__()
 
         self.pooled_width = int(pooled_width)
         self.pooled_height = int(pooled_height)
