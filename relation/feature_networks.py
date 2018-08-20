@@ -68,37 +68,39 @@ class RoIAlign_withBanks(nn.Module):
         #get corresponding fmaps
         map_indices = chooseFeatureMapIndices_fromBboxCoordList_x1y1x2y2(top_absolute_net_locs, len(feature_maps))
         maxfmapsize = feature_maps[min(map_indices)].shape[-1]
-        upscaled_feature_maps_tensor = torch.cat([F.upsample(input = feature_maps[i], size = (maxfmapsize, maxfmapsize), mode="bilinear", align_corners = False).unsqueeze(1) for i in range(len(feature_maps))], dim=1)
-        squeeze01shape = (upscaled_feature_maps_tensor.shape[0]*upscaled_feature_maps_tensor.shape[1], upscaled_feature_maps_tensor.shape[2], upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
-        outshape = (len(self.aspect_ratios)+1, upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
-        ratio_banks = torch.cat([self.aspect_ratio_convs[i](upscaled_feature_maps_tensor.view(squeeze01shape)) for i in range(len(self.aspect_ratio_convs))]).view(outshape)
+        upscaled_feature_maps_tensor = tf.concat([tf.squeeze(tf.image.resize_image(feature_maps[i], [maxfmapsize, maxfmapsize], method=0), [1]) for i in range(len(feature_maps))], axis=1)
+        
+        
+        squeeze01shape = [upscaled_feature_maps_tensor.shape[0]*upscaled_feature_maps_tensor.shape[1], upscaled_feature_maps_tensor.shape[2], upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
+        outshape = [len(self.aspect_ratios)+1, upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
+        ratio_banks = tf.reshape(tf.concat([self.aspect_ratio_convs[i](tf.reshape(upscaled_feature_maps_tensor,squeeze01shape)) for i in range(len(self.aspect_ratio_convs))]), outshape))
         ### sub-region banks
         sr_outshape = (len(self.offsets_list), upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
-        subregion_banks = torch.cat([self.shifted_convs[i](upscaled_feature_maps_tensor.view(squeeze01shape)) for i in range(len(self.shifted_convs))]).view(sr_outshape)
-        reduced_default_feature_maps_tensor = self.default_pool_reduction_conv(upscaled_feature_maps_tensor.view(squeeze01shape)).view((upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, maxfmapsize, maxfmapsize))
-        selected_fmaps_tensor_default = torch.cat([reduced_default_feature_maps_tensor[which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], dim=0)
+        subregion_banks = tf.reshape(tf.concat([self.shifted_convs[i](tf.reshape(upscaled_feature_maps_tensor, squeeze01shape)) for i in range(len(self.shifted_convs))]), sr_outshape)
+        reduced_default_feature_maps_tensor = tf.reshape(self.default_pool_reduction_conv(tf.reshape(upscaled_feature_maps_tensor, squeeze01shape)), [upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, maxfmapsize, maxfmapsize])
+        selected_fmaps_tensor_default = tf.concat([reduced_default_feature_maps_tensor[which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
         pooled_regions_default = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_default, bbox_gridinterpolations, use_cuda)
         ##### now selectively pool the aspect ratio and subregion rois from their tensors
-        netloc_dims = (top_absolute_net_locs[:,2:] - top_absolute_net_locs[:,0:2]).detach().cpu().numpy()
-        netloc_ratios_widthtoheight = np.where(netloc_dims[:,1] <= 0., netloc_dims[:,0]*0+1, netloc_dims[:,0]/netloc_dims[:,1])
-        which_aspectratio_ind = np.where(netloc_ratios_widthtoheight < self.aspect_ratios[0], 0, np.where(netloc_ratios_widthtoheight > self.aspect_ratios[1], 2, 1))
+        netloc_dims = top_absolute_net_locs[:,2:] - top_absolute_net_locs[:,0:2]
+        netloc_ratios_widthtoheight = tf.where(netloc_dims[:,1] <= 0., netloc_dims[:,0]*0+1, netloc_dims[:,0]/netloc_dims[:,1])
+        which_aspectratio_ind = tf.where(netloc_ratios_widthtoheight < self.aspect_ratios[0], 0, tf.where(netloc_ratios_widthtoheight > self.aspect_ratios[1], 2, 1))
             #ratio_banks #torch.Size([3, 2, 6, 40, 38, 38])
-        selected_fmaps_tensor_aspectratio = torch.cat([ratio_banks[which_aspectratio_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], dim=0)
+        selected_fmaps_tensor_aspectratio = tf.concat([ratio_banks[which_aspectratio_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
         pooled_regions_aspectratio = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_aspectratio, bbox_gridinterpolations, use_cuda)
         ##pool again for subregions
-        netloc_centers_xy = torch.cat([(top_absolute_net_locs[:,0:1] + top_absolute_net_locs[:,2:3])/2, (top_absolute_net_locs[:,1:2] + top_absolute_net_locs[:,3:4])/2], dim=1).detach().cpu().numpy()
+        netloc_centers_xy = tf.concat([(top_absolute_net_locs[:,0:1] + top_absolute_net_locs[:,2:3])/2, (top_absolute_net_locs[:,1:2] + top_absolute_net_locs[:,3:4])/2], axis=1)
             #here in this case, the net_locs are width then height
-        which_x_ind = np.where(netloc_centers_xy[:,0] > 2/3., 2, np.where(netloc_centers_xy[:,0] < 1/3., 0, 1))
-        which_y_ind = np.where(netloc_centers_xy[:,1] > 2/3., 2, np.where(netloc_centers_xy[:,1] < 1/3., 0, 1))
+        which_x_ind = tf.where(netloc_centers_xy[:,0] > 2/3., 2, tf.where(netloc_centers_xy[:,0] < 1/3., 0, 1))
+        which_y_ind = tf.where(netloc_centers_xy[:,1] > 2/3., 2, tf.where(netloc_centers_xy[:,1] < 1/3., 0, 1))
         which_subregion_ind = 3*which_y_ind + which_x_ind
             #subregion_banks #torch.Size([9, 2, 6, 40, 38, 38])
-        selected_fmaps_tensor_subregion = torch.cat([subregion_banks[which_subregion_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], dim=0)
+        selected_fmaps_tensor_subregion = tf.concat([subregion_banks[which_subregion_ind[i], which_image_ind[i], map_indices[i]].unsqueeze(0) for i in range(len(map_indices))], axis=0)
         pooled_regions_subregion = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_subregion, bbox_gridinterpolations, use_cuda)
         ####now combine the subregion and aspect ratio maps
             #paper uses elementwise sum on the aspect ratio and subregion banks.
             #but then wtf does it do to the default bank and the summed bank to get a bank the same size? It uses a different symbol in the diagram.
             #So you know what? I'm just going to concatenate all three maps because I know it works.
-        concatted_attention_maps = torch.cat((pooled_regions_default, pooled_regions_aspectratio, pooled_regions_subregion), dim=1)
+        concatted_attention_maps = tf.concat((pooled_regions_default, pooled_regions_aspectratio, pooled_regions_subregion), axis=1)
         #then, since my model wants the output shape, let's just have a conv reduce the number of features
         slim_output_maps = self.final_reduction_convs(concatted_attention_maps)
         return slim_output_maps
@@ -177,18 +179,18 @@ def vectorizedTorchBilinearInterpolationGrid(bboxcoordslist, grid_width, grid_he
     x2 = bboxcoordslist[:, 2:3]
     y1 = bboxcoordslist[:, 1:2]
     y2 = bboxcoordslist[:, 3:4]
-    if use_cuda:
-        x_ranges = torch.arange(grid_width).cuda()*(x2-x1)/max(1.,(grid_width-1.)) + x1
-        y_ranges = torch.arange(grid_height).cuda()*(y2-y1)/max(1.,(grid_height-1.)) + y1
-    else:
-        x_ranges = torch.arange(grid_width)*(x2-x1)/max(1.,(grid_width-1.)) + x1
-        y_ranges = torch.arange(grid_height)*(y2-y1)/max(1.,(grid_height-1.)) + y1
+#     if use_cuda:
+#         x_ranges = torch.arange(grid_width).cuda()*(x2-x1)/max(1.,(grid_width-1.)) + x1
+#         y_ranges = torch.arange(grid_height).cuda()*(y2-y1)/max(1.,(grid_height-1.)) + y1
+#     else:
+    x_ranges = np.arange(grid_width)*(x2-x1)/max(1.,(grid_width-1.)) + x1
+    y_ranges = np.arange(grid_height)*(y2-y1)/max(1.,(grid_height-1.)) + y1
     #Now for each row in these range lists--that's two Nx7 tensors, where each row is the x1 to x2 or y1 to y2 range corresponding to an example--I want to make a grid out of the x and y values. Numpy has meshgrid. Does torch have something similar?
     #return np.array(np.meshgrid(x_range, y_range)).transpose(2,1,0)
-    bbox_interpolations = torch_combined_meshgrid(x_ranges, y_ranges)
-    bbox_interpolations = bbox_interpolations.clamp(0,1)
+    bbox_interpolations = tf_combined_meshgrid(x_ranges, y_ranges)
+    bbox_interpolations = tf.clip_by_value(bbox_interpolations, 0, 1)
     return bbox_interpolations
-def torch_combined_meshgrid(x_ranges, y_ranges):
+def tf_combined_meshgrid(x_ranges, y_ranges):
     """
     convert a NxW x_ranges and a NxH y_ranges into a NxWxHx2 list of coordinate grids.
     To be fed into a mapping function to turn each point into a weighted average of the four nearest points from a feature map associated with each example.
@@ -306,7 +308,7 @@ class CoordConv():
            out = self.dwiseconv_stripxy(out)
         return out
 class CoordConvTranspose():
-    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = [1, 1, 1, 1], padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
+    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
         super(CoordConvTranspose, self).__init__()
         self.theconv = nn.ConvTranspose2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, output_padding = output_padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
         self.groups = groups
@@ -317,10 +319,12 @@ class CoordConvTranspose():
 #         iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
         x = makeXChannel_andCatIt(x, iscuda)
         x = makeYChannel_andCatIt(x, iscuda)
-        w = np.array([[1,-1]],dtype=np.float32)
+        batch_size = x.shape[0]
+        width = x.shape[0]
+        height = x.shape[0]
+        w = tf.random_normal(shape=[kernel_size,kernel_size, out_channels, in_channels])
         w = tf.Variable(w)
-        w = tf.reshape(w, [1,2,1,1])
-        out = tf.nn.conv2d_transpose(x, w, [1,3,3,1],strides, padding)
+        out = tf.nn.conv2d_transpose(x, w, output_shape=[1,stride*width,stride*height,out_channels],strides=[1,strides, strides,1], padding='SAME')
         return out
 def makeXChannel_andCatIt(mytensor, iscuda):
     dims = mytensor.shape[-2:]
