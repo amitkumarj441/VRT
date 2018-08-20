@@ -195,13 +195,14 @@ def torch_combined_meshgrid(x_ranges, y_ranges):
     """
     grid_width = x_ranges.shape[1]
     grid_height = y_ranges.shape[1]
-    x_grid = x_ranges.repeat(1, grid_height).view(x_ranges.shape[0], grid_width, grid_height, 1)
-    y_grid = y_ranges.repeat(1, grid_width).view(x_ranges.shape[0], grid_width, grid_height, 1).transpose(1,2)
-    output = torch.cat((x_grid, y_grid), dim=-1)
-    output = output.transpose(2,1)
-    #transpose is so output[0,2,1] will get 3rd x and 2nd y coordinate, rather than [0,1,2] being used to get that.
+    x_grid = tf.reshape(tf.tile(tf.reshape(x_grid, [-1, -1, 1]), [1, 1, grid_height]), [x_ranges.shape[0], grid_width, grid_height, 1])
+    y_grid = tf.reshape(tf.tile(tf.reshape(y_grid, [-1, -1, 1]), [1, 1, grid_width]), [y_ranges.shape[0], grid_width, grid_height, 1])
+    output = tf.concat([x_grid,y_grid], 3)
+    output = tf.transpose(output, [0,2,1,3])
     return output
 # single item stuff
+
+
 def numpyBilinearInterpolationGrid(x1, y1, x2, y2, grid_width, grid_height):
     """
     transform a bbox point range from x1 to x2 (and y1 to y2) into a WxH bilinear interpolated grid.
@@ -213,6 +214,8 @@ def numpyBilinearInterpolationGrid(x1, y1, x2, y2, grid_width, grid_height):
     x_range = np.arange(grid_width)*(x2-x1)/max(1.,(grid_width-1.)) + x1
     y_range = np.arange(grid_height)*(y2-y1)/max(1.,(grid_height-1.)) + y1
     return np.array(np.meshgrid(x_range, y_range)).transpose(2,1,0)
+
+
 def chooseFeatureMapIndices_fromBboxCoordList_x1y1x2y2(bboxcoordslist, len_feature_maps = 6):
     """
     bboxcoordslist: Nx4 x1 y1 x2 y2 bounding box coords tensor. Coordinates are normed from 0 to 1.
@@ -223,12 +226,13 @@ def chooseFeatureMapIndices_fromBboxCoordList_x1y1x2y2(bboxcoordslist, len_featu
     x1, y1, x2, y2 = bboxcoordslist.split(1, dim=1)
     widths = x2 - x1
     heights = y2 - y1
-    avg_dims = torch.sqrt(widths*heights).cpu()
-    log2_dims = torch.log2(avg_dims)
-    map_indices = torch.tensor(len_feature_maps - 1.) + log2_dims
-    map_indices = torch.floor(map_indices)
-    map_indices = torch.clamp(map_indices, 0, len_feature_maps-1)
-    map_indices = map_indices.int().view(-1).detach().numpy()
+    avg_dims = tf.sqrt(widths*heights)
+    log2_dims = tf.log(avg_dims)/tf.log(2)
+    map_indices = tf.convert_to_tensor(len_feature_maps - 1.) + log2_dims
+    map_indices = tf.floor(map_indices)
+    map_indices = tf.clip_by_value(map_indices, 0, len_feature_maps-1)
+    map_indices = tf.reshape(tf.cast(map_indices, tf.int), [-1]).eval()
+#     map_indices = map_indices.int().view(-1).detach().numpy()
     return map_indices
 def getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor, bbox_gridinterpolations, use_cuda = True):
     """
@@ -238,68 +242,71 @@ def getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmap
     fmap_dim = selected_fmaps_tensor.shape[-1]
     if fmap_dim == 1:
         return selected_fmaps_tensor[:, :, 0:1, 0:1]
-    fmap_point_start = torch.floor(bbox_gridinterpolations*(fmap_dim-1))/(fmap_dim-1) #have to use dim-1 here because the arrays go from 0 to n-1
-    fmap_point_end = torch.ceil(bbox_gridinterpolations*(fmap_dim-1))/(fmap_dim-1)
+    fmap_point_start = tf.floor(bbox_gridinterpolations*(fmap_dim-1))/(fmap_dim-1) #have to use dim-1 here because the arrays go from 0 to n-1
+    fmap_point_end = tf.ceil(bbox_gridinterpolations*(fmap_dim-1))/(fmap_dim-1)
     distance_from_start = bbox_gridinterpolations - fmap_point_start
-    proportion_to_take_from_start_x = torch.ones(bbox_gridinterpolations.shape[0:3])
-    proportion_to_take_from_start_y = torch.ones(bbox_gridinterpolations.shape[0:3])
-    if use_cuda:
-        proportion_to_take_from_start_x = proportion_to_take_from_start_x.cuda()
-        proportion_to_take_from_start_y = proportion_to_take_from_start_y.cuda()
+    proportion_to_take_from_start_x = tf.ones(bbox_gridinterpolations.shape[0:3])
+    proportion_to_take_from_start_y = tf.ones(bbox_gridinterpolations.shape[0:3])
+#     if use_cuda:
+#         proportion_to_take_from_start_x = proportion_to_take_from_start_x.cuda()
+#         proportion_to_take_from_start_y = proportion_to_take_from_start_y.cuda()
     difference_x = (fmap_point_end[:,:,:,0] - fmap_point_start[:,:,:,0])
     difference_y = (fmap_point_end[:,:,:,1] - fmap_point_start[:,:,:,1])
     difference_x_is_zero = difference_x == 0
     difference_y_is_zero = difference_y == 0
-    difference_x_zeros_set_to_ones = difference_x + difference_x_is_zero.float()
-    difference_y_zeros_set_to_ones = difference_y + difference_y_is_zero.float()
+    difference_x_zeros_set_to_ones = tf.cast(difference_x + difference_x_is_zero, tf.float32)
+    difference_y_zeros_set_to_ones = tf.cast(difference_y + difference_y_is_zero, tf.float32)
         #this is for say, if x1 and x2 are the same value. distance between the two will be 0 and we don't want to divide by 0. In this case, the proportions should be set to use x1*1 and x2*0.
     proportion_to_take_from_start_x = 1. - distance_from_start[:,:,:,0] / difference_x_zeros_set_to_ones
     proportion_to_take_from_end_x = 1. - proportion_to_take_from_start_x
     proportion_to_take_from_start_y = 1. - distance_from_start[:,:,:,1] / difference_y_zeros_set_to_ones
     proportion_to_take_from_end_y = 1. - proportion_to_take_from_start_y
     #now to get the weighted sum...
-    fmap_index_start = torch.round(fmap_point_start*(fmap_dim-1)).long()
-    fmap_index_end = torch.round(fmap_point_end*(fmap_dim-1)).long()
+    fmap_index_start = tf.round(fmap_point_start*(fmap_dim-1)).long()
+    fmap_index_end = tf.round(fmap_point_end*(fmap_dim-1)).long()
     #tl = feature_map[0, :, fmap_index_start[0], fmap_index_start[1]]
     #now what should the correct top left output shape be? I think it should be 12x512x7x7
     #tl = selected_fmaps_tensor[:, :, fmap_index_start[:,:,:,0], fmap_index_start[:,:,:,1]]
         #this junk blob returns 12, 512, 12, 7, 7 shape
-    tl = torch.cat([selected_fmaps_tensor[i:i+1, :, fmap_index_start[i,:,:,0], fmap_index_start[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], dim=0)
+    tl = tf.concat([selected_fmaps_tensor[i:i+1, :, fmap_index_start[i,:,:,0], fmap_index_start[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], axis=0)
         #that's a bit messy because of the list comprehension, but it seems to work.
         #[][][]how would I do that without the list comprehension?
-    tr = torch.cat([selected_fmaps_tensor[i:i+1, :, fmap_index_end[i,:,:,0], fmap_index_start[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], dim=0)
-    bl = torch.cat([selected_fmaps_tensor[i:i+1, :, fmap_index_start[i,:,:,0], fmap_index_end[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], dim=0)
-    br = torch.cat([selected_fmaps_tensor[i:i+1, :, fmap_index_end[i,:,:,0], fmap_index_end[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], dim=0)
-    reshapeshape = (bbox_gridinterpolations.shape[0], 1, bbox_gridinterpolations.shape[1], bbox_gridinterpolations.shape[2])
-    p_tl = (proportion_to_take_from_start_x*proportion_to_take_from_start_y).view(reshapeshape)
-    p_tr = (proportion_to_take_from_end_x*proportion_to_take_from_start_y).view(reshapeshape)
-    p_bl = (proportion_to_take_from_start_x*proportion_to_take_from_end_y).view(reshapeshape)
-    p_br = (proportion_to_take_from_end_x*proportion_to_take_from_end_y).view(reshapeshape)
+    tr = tf.concat([selected_fmaps_tensor[i:i+1, :, fmap_index_end[i,:,:,0], fmap_index_start[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], axis=0)
+    bl = tf.concat([selected_fmaps_tensor[i:i+1, :, fmap_index_start[i,:,:,0], fmap_index_end[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], axis=0)
+    br = tf.concat([selected_fmaps_tensor[i:i+1, :, fmap_index_end[i,:,:,0], fmap_index_end[i,:,:,1]] for i in range(selected_fmaps_tensor.shape[0])], axis=0)
+    reshapeshape = [bbox_gridinterpolations.shape[0], 1, bbox_gridinterpolations.shape[1], bbox_gridinterpolations.shape[2]]
+    p_tl = tf.reshape(proportion_to_take_from_start_x*proportion_to_take_from_start_y, reshapeshape)
+    p_tr = tf.reshape(proportion_to_take_from_end_x*proportion_to_take_from_start_y, reshapeshape)
+    p_bl = tf.reshape(proportion_to_take_from_start_x*proportion_to_take_from_end_y, reshapeshape)
+    p_bl = tf.reshape(proportion_to_take_from_start_x*proportion_to_take_from_end_y, reshapeshape)
+    p_br = proportion_to_take_from_end_x*proportion_to_take_from_end_y, reshapeshape)
     weighted_sum = p_tl*tl + p_tr*tr + p_bl*bl + p_br*br
     return weighted_sum
 
 ##coordconv
-class CoordConv(nn.Module):
+class CoordConv():
     """
     https://arxiv.org/abs/1807.03247
     convolution, but with appending two x and y coordinate channels before the conv.
     """
-    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 0, bias = False, groups = 1, dilation = (1,1)):
+    def __init__(self, in_channels, out_channels, kernel_size = [1,1], stride = 1, padding = 'SAME', bias = False, groups = 1, dilation = (1,1)):
         super(CoordConv, self).__init__()
-        self.theconv = nn.Conv2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
+        self.theconv = slim.conv2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
         self.groups = groups
         if self.groups > 1:
             self.dwiseconv_stripxy = nn.Conv2d(in_channels = in_channels + 2, out_channels = in_channels, kernel_size = 1, stride = 1, padding = 0, bias = False)
     def forward(self,x):
-        iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
+#         iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
         x = makeXChannel_andCatIt(x, iscuda)
         x = makeYChannel_andCatIt(x, iscuda)
-        out = self.theconv(x)
+        out = slim.conv2d(x, out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding)
+#         (in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
+
         if self.groups > 1:
            out = self.dwiseconv_stripxy(out)
         return out
-class CoordConvTranspose(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = 1, padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
+class CoordConvTranspose():
+    def __init__(self, in_channels, out_channels, kernel_size = 1, stride = [1, 1, 1, 1], padding = 1, output_padding = 1, bias = False, groups = 1, dilation = (1,1)):
         super(CoordConvTranspose, self).__init__()
         self.theconv = nn.ConvTranspose2d(in_channels = in_channels+2, out_channels = out_channels if groups == 1 else in_channels + 2, kernel_size = kernel_size, stride = stride, padding = padding, output_padding = output_padding, bias = bias, groups = in_channels+2 if groups > 1 else groups, dilation = dilation)
         self.groups = groups
@@ -307,10 +314,13 @@ class CoordConvTranspose(nn.Module):
             print("CoordConvTranspose error: unsure how to handle groups > 1. implement.")
         #    self.dwiseconv_stripxy = nn.ConvTranspose2d(in_channels = in_channels + 2, out_channels = in_channels, kernel_size = 1, stride = 1, padding = 0, output_padding = 0, bias = False)
     def forward(self,x):
-        iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
+#         iscuda = next(self.parameters()).is_cuda #have to check for cuda when appending the channels.
         x = makeXChannel_andCatIt(x, iscuda)
         x = makeYChannel_andCatIt(x, iscuda)
-        out = self.theconv(x)
+        w = np.array([[1,-1]],dtype=np.float32)
+        w = tf.Variable(w)
+        w = tf.reshape(w, [1,2,1,1])
+        out = tf.nn.conv2d_transpose(x, w, [1,3,3,1],strides, padding)
         return out
 def makeXChannel_andCatIt(mytensor, iscuda):
     dims = mytensor.shape[-2:]
@@ -345,19 +355,16 @@ def makeYChannel_andCatIt(mytensor, iscuda):
     return out
 
 ##GroupNorm
-class GroupNorm(nn.Module):
+class GroupNorm():
     """
     https://arxiv.org/abs/1803.08494
     Apparently it's better than batchnorm?
     https://github.com/kuangliu/pytorch-groupnorm/blob/master/groupnorm.py
     """
     def __init__(self, num_features, num_groups=None, eps=1e-5):
-        super(GroupNorm, self).__init__()
-        #self.weight = nn.Parameter(torch.ones(1,num_features,1,1))
-        #self.bias = nn.Parameter(torch.zeros(1,num_features,1,1))
-        ##just changing these to 1D so my previous models can load batchnorm weights without complaining
-        self.weight = nn.Parameter(torch.ones(num_features))
-        self.bias = nn.Parameter(torch.zeros(num_features))
+        
+        self.weight = tf.Variable(tf.ones([num_features]))
+        self.bias = tf.Variable(tf.zeros([num_features]))
         self.num_features = num_features
         if num_groups is None:
             self.num_groups = seekGroups(num_features)
@@ -365,15 +372,16 @@ class GroupNorm(nn.Module):
             self.num_groups = num_groups
         self.eps = eps
     def forward(self, x):
-        N,C,H,W = x.size()
+        [N,H,W,C] = x.get_shape.as_list()
         G = self.num_groups
         assert C % G == 0
-        x = x.view(N,G,-1)
-        mean = x.mean(-1, keepdim=True)
-        var = x.var(-1, keepdim=True)
-        x = (x-mean) / (var+self.eps).sqrt()
-        x = x.view(N,C,H,W)
-        return x * self.weight.view((1,self.num_features,1,1)) + self.bias.view((1,self.num_features,1,1))
+        x = tf.reshape(x, [N, G, -1])
+        mean, var = tf.nn.moments(x, axis=-1)
+        x = (x-mean) / tf.sqrt(var+self.eps)
+        x = tf.reshape(x, [N, H, W, C])
+        return x * tf.reshape(self.weight, [1, self.num_features, 1, 1]) + tf.reshape(self.bias, [1, self.num_features, 1, 1])
+    
+    
 def seekGroups(num_channels, divisors = [8,4,3,2]):
     divisible = np.array([num_channels%x == 0 for x in divisors])
     if not divisible.any():
