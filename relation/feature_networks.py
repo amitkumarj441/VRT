@@ -44,11 +44,11 @@ def RoIAlign_withBanks(self, output_size = 7, in_channels = 512, out_channels = 
 
 
     squeeze01shape = [upscaled_feature_maps_tensor.shape[0]*upscaled_feature_maps_tensor.shape[1], upscaled_feature_maps_tensor.shape[2], upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
-    outshape = [len(self.aspect_ratios)+1, upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
-    ratio_banks = tf.reshape(tf.concat([self.aspect_ratio_convs[i](tf.reshape(upscaled_feature_maps_tensor,squeeze01shape)) for i in range(len(self.aspect_ratio_convs))]), outshape))
+    outshape = [len(self.aspect_ratios)+1, upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4]]
+    ratio_banks = tf.reshape(tf.concat([aspect_ratio_convs[i](tf.reshape(upscaled_feature_maps_tensor,squeeze01shape)) for i in range(len(aspect_ratio_convs))]), outshape))
     ### sub-region banks
-    sr_outshape = (len(self.offsets_list), upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], self.out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
-    subregion_banks = tf.reshape(tf.concat([self.ShiftedConv[i][0](tf.reshape(upscaled_feature_maps_tensor, squeeze01shape), offset_x = ShiftedConv[i][1], offset_y = ShiftedConv[i][2]) for i in range(len(shifted_convs))]), sr_outshape)
+    sr_outshape = (len(offsets_list), upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], out_channels, upscaled_feature_maps_tensor.shape[3], upscaled_feature_maps_tensor.shape[4])
+    subregion_banks = tf.reshape(tf.concat([ShiftedConv[i][0](tf.reshape(upscaled_feature_maps_tensor, squeeze01shape), offset_x = ShiftedConv[i][1], offset_y = ShiftedConv[i][2]) for i in range(len(shifted_convs))]), sr_outshape)
     reduced_default_feature_maps_tensor = tf.reshape(default_pool_reduction_conv(tf.reshape(upscaled_feature_maps_tensor, squeeze01shape)), [upscaled_feature_maps_tensor.shape[0], upscaled_feature_maps_tensor.shape[1], out_channels, maxfmapsize, maxfmapsize])
     selected_fmaps_tensor_default = tf.concat([tf.expand_dims(reduced_default_feature_maps_tensor[which_image_ind[i], map_indices[i]], 0) for i in range(len(map_indices))], axis=0)
     pooled_regions_default = getWeightedSum_ofFourFmapPoints_forFmapTensorAndBboxGridTensor(selected_fmaps_tensor_default, bbox_gridinterpolations, use_cuda)
@@ -74,7 +74,7 @@ def RoIAlign_withBanks(self, output_size = 7, in_channels = 512, out_channels = 
         #So you know what? I'm just going to concatenate all three maps because I know it works.
     concatted_attention_maps = tf.concat((pooled_regions_default, pooled_regions_aspectratio, pooled_regions_subregion), axis=1)
     #then, since my model wants the output shape, let's just have a conv reduce the number of features
-    slim_output_maps = CoordConv(x, in_channels = self.out_channels*3, out_channels = self.out_channels, stride = 1, kernel_size = 1, padding = 0, bias = False)
+    slim_output_maps = CoordConv(x, in_channels = out_channels*3, out_channels = out_channels, stride = 1, kernel_size = 1, padding = 0, bias = False)
 
     return slim_output_maps
     
