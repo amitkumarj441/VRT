@@ -18,25 +18,46 @@ from retinanet_utils import freeze_bn
 from logger import Logger
 from encoder import DataEncoder
 
-def train(model, trainloader, optimizer, device, epoch, criterion, step, logger, batch_size):
-    encoder = DataEncoder()
-    model.train()
-    freeze_bn(model) # http://qr.ae/TUIS14
 
-    start_time = time.time()
-    train_loss = 0
+def read_record(image_size=608):
+    feature = {"label": tf.VarLenFeature(tf.float32), "img_raw": tf.FixedLenFeature([], tf.string)}
+    reader = tf.TFRecordReader()
+    filename_queue = tf.train.string_input_producer(all_records)
+    _, serialized_example = reader.read(filename_queue)
+    logging.info('read1')
+    features = tf.parse_single_example(serialized_example, features=feature)
+    image = tf.decode_raw(features['img_raw'], tf.uint8)
+    
+    image = tf.reshape(image, [image_size, image_size, 3])
 
-    for batch_idx, (data, loc_targets, cls_targets, ori_img_shape) in enumerate(trainloader):
-        inputs, loc_targets, cls_targets = data.to(device), loc_targets.to(device), \
-                cls_targets.to(device)
-        optimizer.zero_grad()
-        loc_preds_split, cls_preds_split = model(inputs.cuda())
-        loc_preds = torch.cat(loc_preds_split, 1)
-        cls_preds = torch.cat(cls_preds_split, 1)
-        loss, loc_loss, cls_loss=criterion(loc_preds.float(), loc_targets.cuda(), \
-                cls_preds.float(), cls_targets.cuda())
-        loss.backward()
-        optimizer.step()
+    image=tf.cast(image,tf.float32)/255.0
+    
+    label = features['label']
+    logging.info('read2')
+    images, labels = tf.train.batch([image, label], batch_size=batch_size, capacity=30, num_threads=1)
+    return images, labels
+
+
+# def train(model, trainloader, optimizer, device, epoch, criterion, step, logger, batch_size):
+#     encoder = DataEncoder()
+#     # http://qr.ae/TUIS14
+
+#     start_time = time.time()
+#     train_loss = 0
+
+#     for batch_idx, (data, loc_targets, cls_targets, ori_img_shape) in enumerate(trainloader):
+#         inputs, loc_targets, cls_targets = data.to(device), loc_targets.to(device), \
+#                 cls_targets.to(device)
+#         optimizer.zero_grad()
+#         loc_preds_split, cls_preds_split = model(inputs.cuda())
+#         loc_preds = torch.cat(loc_preds_split, 1)
+#         cls_preds = torch.cat(cls_preds_split, 1)
+#         loss, loc_loss, cls_loss=criterion(loc_preds.float(), loc_targets.cuda(), \
+#                 cls_preds.float(), cls_targets.cuda())
+        
+#         sess.run(op, )
+#         loss.backward()
+#         optimizer.step()
 
         if batch_idx % 10 == 0:
             # print loss & highest confidence
@@ -51,40 +72,40 @@ def train(model, trainloader, optimizer, device, epoch, criterion, step, logger,
             for tag, value in info.items():
                 logger.scalar_summary(tag, value, step)
 
-            # highest confidence
-            t_cls_preds = torch.div(torch.sum(cls_preds, dim=0).squeeze(),batch_size)
-            score, _ = t_cls_preds.sigmoid().max(1)
-            obj_idx = score > 0.5 #  CONF_THRESH
-            max_conf = torch.max(score)
-            print('highest_conf: %f, num: %d' % (max_conf, torch.sum(obj_idx)))
+#             # highest confidence
+#             t_cls_preds = torch.div(torch.sum(cls_preds, dim=0).squeeze(),batch_size)
+#             score, _ = tf.nn.sigmoid(t_cls_preds)
+#             obj_idx = score > 0.5 #  CONF_THRESH
+#             max_conf = tf.reduce_max(score)
+#             print('highest_conf: %f, num: %d' % (max_conf, torch.sum(obj_idx)))
 
-        if batch_idx % 1 == 0:
-            # summary image record
-            pred_boxes, pred_labels = [], []
-            if batch_size > 10:
-                show_num_img = 10
-            else:
-                show_num_img = batch_size
-            for img_idx in range(show_num_img):
-                pdb.set_trace()
-                pred_box, pred_label, _ = encoder.decode(loc_preds_split, cls_preds_split\
-                    , data.shape, ori_img_shape[img_idx], img_idx)
-                pred_boxes.append(pred_box)
-                pred_labels.append(pred_label)
-            info = {'images': inputs[:show_num_img].cpu().numpy()}
-            for tag, images in info.items():
-                images = logger.image_drawbox(images, pred_boxes, pred_labels)
-                logger.image_summary(tag, images, step)
-        step += 1
-    return loss, step
+#         if batch_idx % 1 == 0:
+#             # summary image record
+#             pred_boxes, pred_labels = [], []
+#             if batch_size > 10:
+#                 show_num_img = 10
+#             else:
+#                 show_num_img = batch_size
+#             for img_idx in range(show_num_img):
+#                 pdb.set_trace()
+#                 pred_box, pred_label, _ = encoder.decode(loc_preds_split, cls_preds_split\
+#                     , data.shape, ori_img_shape[img_idx], img_idx)
+#                 pred_boxes.append(pred_box)
+#                 pred_labels.append(pred_label)
+#             info = {'images': inputs[:show_num_img].cpu().numpy()}
+#             for tag, images in info.items():
+#                 images = logger.image_drawbox(images, pred_boxes, pred_labels)
+#                 logger.image_summary(tag, images, step)
+#         step += 1
+#     return loss, step
 
 def test(model,testloader,device,criterion,logger,step):
     model.eval()
     for data, loc_targets, cls_targets, _ in testloader:
         inputs = data.to(device)
         loc_preds, cls_preds = model(inputs.cuda())
-        loc_preds = torch.cat(loc_preds, 1)
-        cls_preds = torch.cat(cls_preds, 1)
+        loc_preds = tf.concat(loc_preds, 1)
+        cls_preds = tf.concat(cls_preds, 1)
         loss, loc_loss, cls_loss  = criterion(loc_preds.float(), loc_targets.cuda(), \
                 cls_preds.float(), cls_targets.cuda())
         break
@@ -119,17 +140,17 @@ def main():
     args = parser.parse_args()
 
     num_workers = os.cpu_count()
-    batch_size = 4 
+    batch_size = 8 
     lr = 0.001
     momentum = 0.9
     weight_decay = 1e-4
     gpus = [0, 1]
     is_best = 0
-    use_cuda = torch.cuda.is_available() 
     opt = args.opt
     step = 0
     min_scale = 600
     max_scale = 1000
+    image_size = 608
 
     if args.debug == 'True':
         num_workers = 0 
@@ -142,16 +163,7 @@ def main():
     trainlist = './data/train'
     testlist = './data/test'
     print("==>>Loading the data.....", args.data_name)
-    trainset = datasets.LoadDataset(trainlist, scale=(min_scale,max_scale), shuffle=True, \
-             transform=transform, train=True, batch_size=batch_size, num_workers=num_workers)
-    testset = datasets.LoadDataset(testlist, scale=(min_scale,max_scale), shuffle=False, \
-            transform=transform, train=False, batch_size=batch_size, num_workers=num_workers)
-    num_classes = 20 #need to update
-    # trainloader
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=False, \
-            num_workers=num_workers, collate_fn=trainset.collate_fn)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, \
-            num_workers=num_workers, collate_fn=testset.collate_fn)
+    num_classes = 62 #need to update
 
     total_iter = 90000.
     total_epoch = int(total_iter/len(trainloader)*len(gpus))
@@ -189,60 +201,68 @@ def main():
         logger = Logger('./logs_debug')
     else:
         logger = Logger('./logs_'+args.data_name+'_'+opt+'_'+lr_decay_method+'_%.5f'%(lr))
+
     
-    seed = int(time.time())
-    torch.manual_seed(seed)
-    global device
-    device = torch.device("cuda" if use_cuda else "cpu")
+    input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
+    label_class = tf.placeholder(tf.float32, [batch_size, anchor_num*num_classes])
+    label_loc = tf.placeholder(tf.float32, [batch_size, anchor_num*4])
 
     # setting network
-    model = RetinaNet(num_classes)
+    pred_class, pred_loc = RetinaNet(num_classes, input_image)
 
     # setting optimizer
     if opt == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        optimizer=tf.train.AdamOptimizer(lr, weight_decay=weight_decay)
+#         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif opt == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+        optimizer = tf.train.AdamOptimizer(lr, momentum=momentum, weight_decay=weight_decay)
     else:
         print('==>>wrong opt name')
 
     # setting loss
-    criterion = FocalLoss(num_classes) # nn.CrossEntropyLoss()
+    loss = [focal_loss(pred_class, label_class), regression_loss(pred_loc, label_loc)]# nn.CrossEntropyLoss()
+    
+    op = optimizer.minimize(loss)
 
     # loading exsit weights
-    args.data_name == 'OpenImagesDataset':
-    init_weight = 'net.pt'
-    checkpoint = torch.load(init_weight)
-    model.load_state_dict(checkpoint)
+    args.data_name == 'OpenImagesDataset'
     
-    if args.weights:
-        if os.path.isfile(args.weights):
-            print("==>>Loading checkpoint '{}'".format(args.weights))
-            checkpoint = torch.load(args.weights)
-            args.start_epoch = checkpoint['epoch']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print("==>>Loaded checkpoint '{}' (epoch {}))".format(args.weights,checkpoint['epoch']))
-        else:
-            print("==>>No checkpoint found")
+    saver = tf.train.Saver()
+    
+    last_checkpoint = tf.train.latest_checkpoint( traindir, 'checkpoint' )
+    if last_checkpoint:
+         saver.restore( sess, last_checkpoint )
+         print( 'Reuse model form: ', format( last_checkpoint ) )
+    else:
+        sess.run(init)
+        print('no checkpoints found')
 
-    if use_cuda:
-        if len(gpus) > 1:
-            model = torch.nn.DataParallel(model).to(device)
-        else:
-            model = model.to(device)
-        model.cuda()
 
     # train
-    for epoch in range(args.start_epoch, total_epoch):
-        _, step = train(model, trainloader, optimizer, device, epoch, criterion, \
-               step, logger, batch_size)
-        test(model, testloader, device, criterion, logger, step)
-        save_checkpoint({'epoch':epoch, 'state_dict':model.state_dict(), \
-                'optimizer':optimizer.state_dict()}, args.data_name, epoch)
-        if epoch == decay_epochs[decay_idx]:
-            adjust_learning_rate(optimizer, lr, decay_idx)
-            decay_idx += 1
+    with tf.Session() as sess:
+        train_images,train_labels=read_record(image_size)
+        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess=sess, coord=coord)
+        
+        
+        for epoch in range(args.start_epoch, total_epoch):
+            img, las = sess.run([train_images, train_labels])
+            
+            sess.run(op, feed_dict={input_image:, label_class:, label_loc:}))
+            if epoch % 10 == 0:
+                batch_loss = sess.run( loss, feed_dict={input_image:, label_class:, label_loc:})
+                print('Cost after epoch '+str(epoch)+':  ', batch_loss )
+    #         _, step = train(model, trainloader, optimizer, device, epoch, criterion, \
+    #                step, logger, batch_size)
+            if epoch % 50 == 0:
+                test(model, testloader, device, criterion, logger, step)
+
+            if epoch % 500 == 0:
+                name = 'retinanet.ckpt'
+                saver.save( sess, os.path.join( traindir, name ), global_step = epoch)
+
+            if epoch == decay_epochs[decay_idx]:
 
 if __name__ == '__main__':
     main()
