@@ -2,27 +2,26 @@ import pdb
 import time
 import argparse
 import os
-import datasets
 
-# import torch
-# import torchvision
-# import torchvision.transforms as transforms
-# import torch.optim as optim
-# import torch.nn as nn
-# import torch.nn.functional as F
 import tensorflow as tf
 
 from retinanet import *   # Import model 
-from focal_loss import focal_loss
-from retinanet_utils import freeze_bn
+from focal_loss import *
 from logger import Logger
 from encoder import DataEncoder
 
+train_records=[]
+test_records=[]
+for i in range(100):
+    train_records.append('train_retinanet'+str(i)+'.tfrecords')
 
-def read_record(image_size=608):
+for i in range(100, 120):
+    test_records.append('train_retinanet'+str(i)+'.tfrecords')
+
+def read_record(records, image_size=608, batch_size=8):
     feature = {"label": tf.VarLenFeature(tf.float32), "img_raw": tf.FixedLenFeature([], tf.string)}
     reader = tf.TFRecordReader()
-    filename_queue = tf.train.string_input_producer(all_records)
+    filename_queue = tf.train.string_input_producer(records)
     _, serialized_example = reader.read(filename_queue)
     logging.info('read1')
     features = tf.parse_single_example(serialized_example, features=feature)
@@ -38,25 +37,6 @@ def read_record(image_size=608):
     return images, labels
 
 
-def test(input_image,testloader,device,criterion,logger,step):
-    
-    for data, loc_targets, cls_targets, _ in testloader:
-        inputs = data.to(device)
-        loc_preds, cls_preds = model(inputs.cuda())
-        loc_preds = tf.concat(loc_preds, 1)
-        cls_preds = tf.concat(cls_preds, 1)
-        loss, loc_loss, cls_loss  = criterion(loc_preds.float(), loc_targets.cuda(), \
-                cls_preds.float(), cls_targets.cuda())
-        break
-    info = {'test loss': loss.item(), 'test_cls_loss': cls_loss.item(), \
-            'test_loc_loss': loc_loss.item()}
-    for tag, value in info.items():
-        logger.scalar_summary(tag,value,step)
-    print('\nTest set: Test_loss: %.5f Test_cls_loss: %.5f Test_loc_loss: %.5f\n'%(loss, \
-            cls_loss,loc_loss))
-
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_name','-data_name',type=str,default='OpenImages')
@@ -70,7 +50,7 @@ def main():
 
     num_workers = os.cpu_count()
     batch_size = 8 
-    lr = 0.001
+    lr_feed = 0.001
     momentum = 0.9
     weight_decay = 1e-4
     gpus = [0, 1]
@@ -80,28 +60,19 @@ def main():
     min_scale = 600
     max_scale = 1000
     image_size = 608
+    anchor_num = 9
+
+    use_pretrained = False
     
     
-    train_dir = 'model_path/'
+    traindir = 'model_path/'
 
     if args.debug == 'True':
         num_workers = 0 
 
-    transform = transforms.Compose([transforms.ToTensor(), \
-            transforms.Normalize((0.485,0.456,0.406),(0.229,0.224,0.225))])
-
-    # dataset
-    args.data_name == "OpenImagesDataset":
-    trainlist = './data/train'
-    testlist = './data/test'
-    print("==>>Loading the data.....", args.data_name)
     num_classes = 62 #need to update
 
-    total_iter = 100000.
-#     total_epoch = int(total_iter/len(trainloader)*len(gpus))
-#     if args.data_name == 'OpenImagesDataset':
-#         total_epoch += 30
-#     print('==>>Total_epoch size is %d'%(total_epoch))
+    total_epoch = 100000
 
     lr_decay_method = args.lr_decay_method
     if lr_decay_method == 'luong5':
@@ -132,60 +103,77 @@ def main():
     if args.debug == 'True':
         logger = Logger('./logs_debug')
     else:
-        logger = Logger('./logs_'+args.data_name+'_'+opt+'_'+lr_decay_method+'_%.5f'%(lr))
+        logger = Logger('./logs_'+args.data_name+'_'+opt+'_'+lr_decay_method+'_%.5f'%(lr_feed))
 
     
-    input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
-    label_class = tf.placeholder(tf.float32, [batch_size, anchor_num*num_classes])
-    label_loc = tf.placeholder(tf.float32, [batch_size, anchor_num*4])
-
-    # setting network
-    pred_class, pred_loc = RetinaNet(num_classes, input_image)
-
-    # setting optimizer
-    if opt == 'Adam':
-        optimizer=tf.train.AdamOptimizer(lr, weight_decay=weight_decay)
-#         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    elif opt == 'SGD':
-        optimizer = tf.train.AdamOptimizer(lr, momentum=momentum, weight_decay=weight_decay)
-    else:
-        print('==>>wrong opt name')
-
-    # setting loss
-    loss = [focal_loss(pred_class, label_class), regression_loss(pred_loc, label_loc)]# nn.CrossEntropyLoss()
-    
-    op = optimizer.minimize(loss)
-
-    # loading exsit weights
-    args.data_name == 'OpenImagesDataset'
-    
-    saver = tf.train.Saver()
-    
-    last_checkpoint = tf.train.latest_checkpoint( traindir, 'checkpoint' )
-    if last_checkpoint:
-         saver.restore( sess, last_checkpoint )
-         print( 'Reuse model form: ', format( last_checkpoint ) )
-    else:
-        sess.run(init)
-        print('no checkpoints found')
-
-
-    # train
     with tf.Session() as sess:
-        train_images,train_labels=read_record(image_size)
+
+        input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
+        label_class = tf.placeholder(tf.float32, [batch_size, anchor_num, num_classes])
+        label_loc = tf.placeholder(tf.float32, [batch_size, anchor_num, 4])
+
+        # setting network
+        net = RetinaNet(input_image)
+        pred_loc, pred_class = net.output
+
+        print(pred_class.shape, pred_loc.shape)
+
+        if use_pretrained:
+            checkpoint_path = 'resnet_v2_101.ckpt'
+            saver = tf.train.Saver(tf.global_variables)
+            saver.restore(sess, checkpoint_path)
+        
+
+        # setting optimizer
+        lr = tf.placeholder(tf.float32)
+        if opt == 'Adam':
+            optimizer = tf.train.AdamOptimizer(lr)
+        elif opt == 'SGD':
+            optimizer = tf.train.MomentumOptimizer(lr, momentum=momentum)
+        else: print('==>>wrong opt name')
+
+        # setting loss
+        f_loss = focal_loss(label_class, pred_class)
+        r_loss = regression_loss(label_loc, pred_loc)
+        loss = f_loss + r_loss
+        op = optimizer.minimize(loss)
+
+        # loading exsit weights  
+        saver = tf.train.Saver() 
+        last_checkpoint = tf.train.latest_checkpoint( traindir, 'checkpoint' )
+        if last_checkpoint:
+            saver.restore( sess, last_checkpoint )
+            print( 'Reuse model form: ', format( last_checkpoint ) )
+        else:
+            sess.run(init)
+            print('no checkpoints found')
+
+        preparer = DataEncoder()
+
+        # train
+    
+        args.data_name == "OpenImagesDataset"
+        print("==>>Loading the data.....", args.data_name)
+        train_images,train_labels=read_record(train_records, 608, batch_size)
+        test_images,test_labels=read_record(test_records, 608, batch_size)
+
         init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-        
         start_time = time.time()
-        for iteration in range(args.start_iteration, total_iterations):
+
+
+        for iteration in range(args.start_epoch, total_epoch):
             img, las = sess.run([train_images, train_labels])
-            class_labels, location_labels = prepare_data(las)
+            class_labels, location_labels = preparer.prepare_data(las)
+
+            if iteration in decay_epochs:
+                lr_feed*=0.5
             
-            sess.run(op, feed_dict={input_image:, label_class:, label_loc:}))
+            sess.run(op, feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels, lr: lr_feed})
             
             if iteration % 10 == 0:
-                batch_loss = sess.run( loss, feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels})
+                batch_loss = sess.run( [f_loss, r_loss], feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels})
                 end_time = time.time()
                 
                 print('Cost after epoch '+str(epoch)+':  ', 'total_loss:', batch_loss, 'cls_loss:', batch_loss[0], \
@@ -194,14 +182,26 @@ def main():
                     'cls_loss': batch_loss[1]}
                 for tag, value in info.items():
                     logger.scalar_summary(tag, value, step)
-            if iteration % 10000 == 0:
-                test(model, testloader, device, criterion, logger, step)
+
+            # if iteration % 1000 == 0:
+            #     test_loss=[]
+            #     for i in range(10):
+                    
+            #         test_loss.append(sess.run( loss, feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels}))
+            #     test_loss=np.array(test_loss)
+            #     print('Validation cost after epoch '+str(epoch)+':  ', 'total_loss:', , 'cls_loss:', batch_loss[0], \
+            #           'loc_loss:', batch_loss[1], 'time_spent:', end_time-start_time )
+            #     info = {'training loss': batch_loss, 'loc_loss': batch_loss[0], \
+            #         'cls_loss': batch_loss[1]}
+            #     for tag, value in info.items():
+            #         logger.scalar_summary(tag, value, step)
+
 
             if iteration % 1000 == 0:
                 name = 'retinanet.ckpt'
                 saver.save( sess, os.path.join( traindir, name ), global_step = epoch)
 
-            if epoch == decay_epochs[decay_idx]:
+
 
 if __name__ == '__main__':
     main()
