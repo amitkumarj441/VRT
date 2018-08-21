@@ -4,12 +4,13 @@ import argparse
 import os
 import datasets
 
-import torch
-import torchvision
-import torchvision.transforms as transforms
-import torch.optim as optim
-import torch.nn as nn
-import torch.nn.functional as F
+# import torch
+# import torchvision
+# import torchvision.transforms as transforms
+# import torch.optim as optim
+# import torch.nn as nn
+# import torch.nn.functional as F
+import tensorflow as tf
 
 from retinanet import *   # Import model 
 from focal_loss import focal_loss
