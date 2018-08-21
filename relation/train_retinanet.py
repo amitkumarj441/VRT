@@ -4,19 +4,17 @@ import argparse
 import os
 
 import tensorflow as tf
-
+from tensorflow import logging
 from retinanet import *   # Import model 
 from focal_loss import *
 from logger import Logger
-from encoder import DataEncoder
+from anchor.anchor_generator import BoxEncoder
 
 train_records=[]
 test_records=[]
 for i in range(100):
-    train_records.append('train_retinanet'+str(i)+'.tfrecords')
+    train_records.append('gs://detectionchallenge/train_retinanet_big'+str(i)+'.tfrecords')
 
-for i in range(100, 120):
-    test_records.append('train_retinanet'+str(i)+'.tfrecords')
 
 def read_record(records, image_size=608, batch_size=8):
     feature = {"label": tf.VarLenFeature(tf.float32), "img_raw": tf.FixedLenFeature([], tf.string)}
@@ -107,36 +105,35 @@ def main():
     else:
         logger = Logger('./logs_'+args.data_name+'_'+opt+'_'+lr_decay_method+'_%.5f'%(lr_feed))
 
+
+    input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
+    label_class = tf.placeholder(tf.float32, [batch_size, 69354, num_classes])
+    label_loc = tf.placeholder(tf.float32, [batch_size, 69354, 4])
+
+    # setting network
+    net = RetinaNet(input_image)
+    pred_loc, pred_class = net.output
+
+
+    # setting optimizer
+    lr = tf.placeholder(tf.float32)
+    if opt == 'Adam':
+        optimizer = tf.train.AdamOptimizer(lr)
+    elif opt == 'SGD':
+        optimizer = tf.train.MomentumOptimizer(lr, momentum=momentum)
+    else: print('==>>wrong opt name')
+
+    # setting loss
+    f_loss = focal_loss(label_class, pred_class)
+    r_loss = regression_loss(label_loc, pred_loc)
+    loss = f_loss + r_loss
+    op = optimizer.minimize(loss)
     
     with tf.Session() as sess:
 
-        input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
-        label_class = tf.placeholder(tf.float32, [num_feature_maps, batch_size, anchor_num, num_classes])
-        label_loc = tf.placeholder(tf.float32, [num_feature_maps, batch_size, anchor_num, 4])
+        train_images,train_labels=read_record(train_records, 608, batch_size)
 
-        # setting network
-        net = RetinaNet(input_image)
-        pred_loc, pred_class = net.output
-
-        if use_pretrained:
-            checkpoint_path = 'resnet_v2_101.ckpt'
-            saver = tf.train.Saver(tf.global_variables)
-            saver.restore(sess, checkpoint_path)
-        
-
-        # setting optimizer
-        lr = tf.placeholder(tf.float32)
-        if opt == 'Adam':
-            optimizer = tf.train.AdamOptimizer(lr)
-        elif opt == 'SGD':
-            optimizer = tf.train.MomentumOptimizer(lr, momentum=momentum)
-        else: print('==>>wrong opt name')
-
-        # setting loss
-        f_loss = focal_loss(label_class, pred_class)
-        r_loss = regression_loss(label_loc, pred_loc)
-        loss = f_loss + r_loss
-        op = optimizer.minimize(loss)
+        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
         # loading exsit weights  
         saver = tf.train.Saver() 
@@ -148,32 +145,55 @@ def main():
             sess.run(init)
             print('no checkpoints found')
 
-        preparer = DataEncoder()
-
         # train
     
         args.data_name == "OpenImagesDataset"
         print("==>>Loading the data.....", args.data_name)
-        train_images,train_labels=read_record(train_records, 608, batch_size)
-        test_images,test_labels=read_record(test_records, 608, batch_size)
 
-        init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(sess=sess, coord=coord)
         start_time = time.time()
 
-
+        encoder = BoxEncoder()
         for iteration in range(args.start_epoch, total_epoch):
             img, las = sess.run([train_images, train_labels])
-            class_labels, location_labels = preparer.prepare_data(las)
+            # class_labels, location_labels = preparer.prepare_data(las)
+            indices = np.array(las.indices)
+            indices = np.reshape(indices, [int(np.ceil(len(indices)/6)), 6, 2])
+            las = np.array(las.values)
+            las = np.reshape(las, [int(np.ceil(len(las)/6)), 6])
+            batches = []
+            temp_list = []
+            for i in range(len(las)):
+                if i > 0 and indices[i][0][0] != indices[i-1][0][0]:
+                    batches.append(temp_list)
+                    temp_list = []
+                temp_list.append(las[i])
+                if i==len(las)-1:
+                    batches.append(temp_list)
+
+           cls_labels = []
+           loc_labels = []
+           for i in range(len(batches)):
+                temp = np.array(batches[i])
+                labels = temp[i][:, 0]
+                bboxes = temp[i][:, 1:]
+
+                loc_trues, cls_trues = encoder.encode(bboxes, labels)
+                print(loc_trues.shape, cls_trues.shape)
+                loc_trues = tf.one_hot(loc_trues, depth=num_classes).eval()
+                cls_trues = cls_trues.eval()
+                
+                cls_labels.append(cls_trues)
+                loc_labels.append(loc_trues)
 
             if iteration in decay_epochs:
                 lr_feed*=0.5
             
-            sess.run(op, feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels, lr: lr_feed})
+            sess.run(op, feed_dict={input_image: img, label_class: cls_labels, label_loc: loc_labels, lr: lr_feed})
             
             if iteration % 10 == 0:
-                batch_loss = sess.run( [f_loss, r_loss], feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels})
+                batch_loss = sess.run( [f_loss, r_loss], feed_dict={input_image: img, label_class: cls_labels, label_loc: loc_labels})
                 end_time = time.time()
                 
                 print('Cost after epoch '+str(epoch)+':  ', 'total_loss:', batch_loss, 'cls_loss:', batch_loss[0], \
@@ -186,7 +206,6 @@ def main():
             if iteration % 1000 == 0:
                 name = 'retinanet.ckpt'
                 saver.save( sess, os.path.join( traindir, name ), global_step = epoch)
-
 
 
 if __name__ == '__main__':
