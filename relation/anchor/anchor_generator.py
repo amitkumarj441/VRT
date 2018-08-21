@@ -5,11 +5,6 @@ from configuration import conf
 
 class BoxEncoder:
     def __init__(self):
-        # TODO
-        # NOTE anchor areas should change according to the ACTUAL object's size
-        # Otherwise the height and width of anchor would be out of tune
-        # E.g., when the input is 448 x 448, object size ranges in []
-        # anchor_areas might be [14^2, 28^2, 56^2, 112^2, 224^2]
         self.anchor_areas = [19 * 19., 38 * 38., 76 * 76., 152 * 152., 304 * 304.]  # p3 -> p7
         self.aspect_ratios = [1 / 2., 1 / 1., 2 / 1.]
         self.scale_ratios = [1., pow(2, 1 / 3.), pow(2, 2 / 3.)]
@@ -89,9 +84,9 @@ class BoxEncoder:
         return loc_trues, cls_trues
 
     def decode(self, loc_preds, cls_preds,
-               input_size=608,
+               input_size=(608,608),
                cls_thred=0.5,
-               max_output_size=conf.max_output_size,
+               max_output_size=10,
                nms_thred=0.5,
                return_score=False,
                tf_box_order=True):
@@ -163,7 +158,7 @@ class BoxEncoder:
     def decode_batch(self,
                      batch_loc_preds,
                      batch_cls_preds,
-                     input_size=conf.input_size,
+                     input_size=(608,608),
                      tf_box_order=True):
         """Choose the most confident one from multiple (if any) predictions per image.
         Make sure each image only has one output (loc + cls)
