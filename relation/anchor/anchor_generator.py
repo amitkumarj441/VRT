@@ -1,7 +1,11 @@
 import math
 import tensorflow as tf
-from utils.box import meshgrid, box_iou, box_nms, change_box_order
-from configuration import conf
+from retinanet_utils import meshgrid, box_iou, box_nms, change_box_order
+import numpy as np
+
+def _make_list_input_size(input_size):
+    input_size = [input_size] * 2 if isinstance(input_size, int) else input_size
+    return tf.cast(input_size, tf.float32)
 
 class BoxEncoder:
     def __init__(self):
@@ -187,3 +191,12 @@ class BoxEncoder:
             for item in ['cls', 'scores']:
                 eval('batch_' + item).append(tf.gather(eval(item), max_score_id).numpy())
         return [tf.convert_to_tensor(item, dtype=tf.float32) for item in [batch_loc, batch_cls, batch_scores]]
+
+
+# a=BoxEncoder()
+# locs = np.zeros([8, 4], dtype=np.float32)
+# classes = np.ones([8, ])
+# loct, clt = a.encode(locs, classes, (608, 608))
+
+# print(loct.shape, clt.shape)
+
