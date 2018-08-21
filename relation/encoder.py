@@ -27,7 +27,7 @@ class DataEncoder():
                     anchor_h, anchor_w = h*sr, w*sr
                     anchors_wh.append([anchor_w, anchor_h])
         num_feat_maps = len(self.anchor_areas)
-        return tf.reshape(tf.convert_to_tensor(anchors_wh), [num_feat_maps, -1, 2])
+        return np.reshape(anchors_wh, [num_feat_maps, -1, 2])
     
     def _get_anchor_boxes(self, input_size):
         """ Compute anchor boxes for each feature map
@@ -55,17 +55,17 @@ class DataEncoder():
 
     def encode(self, boxes, labels, input_size):
 
-        input_size = tf.convert_to_tensor([input_size, input_size]) if isinstance(input_size, int) else tf.convert_to_tensor(input_size)
+        input_size = [input_size, input_size] if isinstance(input_size, int) else input_size
         anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
 
         ious = box_iou(anchor_boxes, boxes, order='xywh')
-        max_ious, max_ids = ious.max(1)
+        max_ious, max_ids = np.minimum(ious, 1)
         boxes = boxes[max_ids]
 
         loc_xy = (boxes[:,:2]-anchor_boxes[:,:2]) / anchor_boxes[:, 2:]
-        loc_wh = tf.log(boxes[:,2:]/ anchor_boxes[:, 2:])
-        loc_targets = tf.concat([loc_xy, loc_wh], 1)
+        loc_wh = np.log(boxes[:,2:]/ anchor_boxes[:, 2:])
+        loc_targets = np.concatenate((loc_xy, loc_wh), 1)
         cls_targets = 1+ labels[max_ids]
 
         cls_targets[max_ious<0.5] = 0
