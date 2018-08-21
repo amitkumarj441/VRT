@@ -1,8 +1,7 @@
 import pdb
 import math
 
-import torch
-
+import tensorflow as tf
 from retinanet_utils import meshgrid, box_ious, box_nms, change_box_order
 
 class DataEncoder():
@@ -28,7 +27,7 @@ class DataEncoder():
                     anchor_h, anchor_w = h*sr, w*sr
                     anchors_wh.append([anchor_w, anchor_h])
         num_feat_maps = len(self.anchor_areas)
-        return torch.Tensor(anchors_wh).view(num_feat_maps, -1, 2)
+        return tf.reshape(tf.convert_to_tensor(anchors_wh), [num_feat_maps, -1, 2])
     
     def _get_anchor_boxes(self, input_size):
         """ Compute anchor boxes for each feature map
@@ -46,17 +45,17 @@ class DataEncoder():
             fm_size = fm_sizes[i]
             grid_size = input_size/fm_size
             fm_w, fm_h = int(fm_size[0]), int(fm_size[1])
-            xy = meshgrid(fm_w, fm_h).float() + 0.5 # 0.5 for centering the mesh
+            xy = tf.cast(meshgrid(fm_w, fm_h), tf.float32) + 0.5 # 0.5 for centering the mesh
             xy = (xy*grid_size)
-            xy = xy.view(fm_h, fm_w, 1, 2).expand(fm_h, fm_w, 9, 2)
-            wh = self.anchors_wh[i].view(1,1,9,2).expand(fm_h, fm_w, 9, 2)
-            box = torch.cat([xy,wh], 3)
-            boxes.append(box.view(-1,4))
-        return torch.cat(boxes,0)
+            xy = tf.tile(tf.reshape(xy, [fm_h, fm_w, 1, 2]), [1,1,9,1]).expand(fm_h, fm_w, 9, 2)
+            wh = tf.reshape(self.anchors_wh[i], [1,1,9,2]).expand(fm_h, fm_w, 9, 2)
+            box = tf.concat([xy,wh], 3)
+            boxes.append(tf.reshape(box, [-1,4]))
+        return tf.concat(boxes,0)
 
     def encode(self, boxes, labels, input_size):
 
-        input_size = torch.Tensor([input_size, input_size]) if isinstance(input_size, int) else torch.Tensor(input_size)
+        input_size = tf.convert_to_tensor([input_size, input_size]) if isinstance(input_size, int) else tf.convert_to_tensor(input_size)
         anchor_boxes = self._get_anchor_boxes(input_size)
         boxes = change_box_order(boxes, 'xyxy2xywh')
 
@@ -65,8 +64,8 @@ class DataEncoder():
         boxes = boxes[max_ids]
 
         loc_xy = (boxes[:,:2]-anchor_boxes[:,:2]) / anchor_boxes[:, 2:]
-        loc_wh = torch.log(boxes[:,2:]/ anchor_boxes[:, 2:])
-        loc_targets = torch.cat([loc_xy, loc_wh], 1)
+        loc_wh = tf.log(boxes[:,2:]/ anchor_boxes[:, 2:])
+        loc_targets = tf.concat([loc_xy, loc_wh], 1)
         cls_targets = 1+ labels[max_ids]
 
         cls_targets[max_ious<0.5] = 0
@@ -78,18 +77,18 @@ class DataEncoder():
         CLS_TRESH = 0.5
         NMS_TRESH = 0.5
 
-        input_size = torch.Tensor([input_size, input_size]) if isinstance(input_size, int) else torch.Tensor(input_size)
+        input_size = tf.convert_to_tensor([input_size, input_size]) if isinstance(input_size, int) else tf.convert_to_tensor(input_size)
         anchor_boxes =self._get_anchor_boxes(input_size)
 
         loc_xy = loc_preds[:, :2]
         loc_wh = loc_preds[:, 2:]
 
         xy = loc_xy*anchor_boxes[:, 2:] + anchor_boxes[:, 2:]
-        wh = loc_wh.exp() * anchor_boxes[:, 2:]
-        boxes = torch.cat([xy-wh/2, xy+ wh/2], 1)
+        wh = tf.exp(loc_wh) * anchor_boxes[:, 2:]
+        boxes = tf.concat([xy-wh/2, xy+ wh/2], 1)
 
-        score, labels = cls_preds.sigmoid().max(1)
+        score, labels = tf.nn.sigmoid(cls_preds)
         ids = score>CLS_TRESH
-        ids = ids.nonzero().squeeze()
+        ids = tf.squeeze(ids[dis!=0])
         keep = box_nms(boxes[ids], score[ids], threshold=NMS_TRESH)
         return boxes[ids][keep], labels[ids][keep]
