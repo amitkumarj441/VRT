@@ -1,148 +1,131 @@
-import pdb
 import math
-
-# import torch
-# import torch.nn as nn
 import tensorflow as tf
-def meshgrid(x, y, row_major=True):
-    '''Return meshgrid in  range x& y
-    Args:
-        x: (int) first dim range
-        y: (int) second dim range
-        row_major: (bool) row major or column major
-    Returns:
-        meshgrid: (tensor) size[x*y,2]
-    Example:
-    >>meshgrid(3,2)     >>meshgrid(3,2,row_major=False)
-    0 0                 0 0
-    1 0                 0 1
-    2 0                 0 2
-    0 1                 1 0
-    1 1                 1 1
-    2 1                 1 2
-    '''
 
-#     w = torch.arange(0,x)
-#     h = torch.arange(0,y)
-    w = tf.range(x)
-    h = tf.range(y)
-    
-    xx = w.repeat(y).view(-1,1)
-    yy = h.view(-1,1).repeat(1,x).view(-1,1)
-    if row_major:
-        xy=torch.cat([xx,yy],1)
-    else:
-        xy=torch.cat([yy,xx],1)
-    return xy
+from numpy import argsort
+
+
+def meshgrid(x, y, row_major=True):
+    """Return meshgrid in range x & y.
+    Args:
+      x: (tf.int32) first dim range.
+      y: (tf.int32) second dim range.
+      row_major: (bool) row major or column major.
+    Returns:
+      (tf.Tensor) meshgrid, shape [x*y, 2]
+    Example:
+    >> meshgrid(3,2)
+    0  0
+    1  0
+    2  0
+    0  1
+    1  1
+    2  1
+    <tf.Tensor 'concat_1:0' shape=(6, 2) dtype=int32>
+    >> meshgrid(3,2,row_major=False)
+    0  0
+    0  1
+    0  2
+    1  0
+    1  1
+    1  2
+    <tf.Tensor 'concat_2:0' shape=(6, 2) dtype=int32>
+    """
+    xx = tf.reshape(tf.tile(tf.range(x), [y]), [-1, 1])
+    yy = tf.reshape(tf.tile(tf.range(y), [x]), [-1, 1])
+    return tf.concat([xx, yy], 1) if row_major else tf.concat([yy, xx], 1)
 
 
 def change_box_order(boxes, order):
-    '''Change the order xywh -> xyxy
+    """Change box order between (xmin, ymin, xmax, ymax) and (xcenter, ycenter, width, height).
     Args:
-        boxes: (tensor) bounding bounding box, [N,4]
-        order: (str) either 'xyxy2xywh' or 'xywh2xyxy'
+      boxes: (tf.tensor) bounding boxes, sized [N, 4].
+      order: (str) either 'xyxy2xywh' or 'xywh2xyxy'.
     Returns:
-        boxes: (tensor) converted bounding box, [N,4]
-    '''
+      (tf.tensor) converted bounding boxes, sized [N, 4].
+    """
     assert order in ['xyxy2xywh', 'xywh2xyxy']
-    a = boxes[:,:2]
-    b = boxes[:,2:]
+    a = boxes[:, :2]
+    b = boxes[:, 2:]
     if order == 'xyxy2xywh':
-        return tf.concat([(a+b)/2, b-a+1], 1)
-    return tf.concat([a-b/2,a+b/2], 1)
+        return tf.concat([(a + b) / 2, b - a], 1)
+    return tf.concat([a - b / 2, a + b / 2], 1)
 
-def box_ious(box1, box2, order='xywh'):
-    '''Compute the intersection over union of two set of boxes
+
+def box_iou(box1, box2, order='xyxy'):
+    """Compute the intersection over union of two set of boxes.
+    The default box order is (xmin, ymin, xmax, ymax).
     Args:
-        box1: (tensor) bounding boxes, size [N,4]
-        box2: (tensor) bounding boxes, size [M,4]
-        order: (str) box order, either 'xyxy' or 'xywh'
+      box1: (tf.tensor) bounding boxes, sized [A, 4].
+      box2: (tf.tensor) bounding boxes, sized [B, 4].
+      order: (str) box order, either 'xyxy' or 'xywh'.
     Return:
-        iou: (tensor) sized [N,M]
-    '''
+      (tensor) iou, sized [A, B].
+    Reference:
+      https://github.com/chainer/chainercv/blob/master/chainercv/utils/bbox/bbox_iou.py
+    """
     if order == 'xywh':
-        box1_coor = change_box_order(box1, 'xywh2xyxy')
-        box2_coor = change_box_order(box2, 'xywh2xyxy')
+        box1, box2 = [change_box_order(i, 'xywh2xyxy') for i in [box1, box2]]
 
-    left_top = tf.maximum(box1_coor[:,None, :2], box2_coor[:,:2])        # [N,M,2]
-    right_bottom = tf.minimum(box1_coor[:,None, 2:], box2_coor[:,2:])    # [N,M,2]
+    # A: #box1, B: #box2
+    lt = tf.maximum(box1[:, None, :2], box2[:, :2])  # [A, B, 2], coordinates left-top
+    rb = tf.minimum(box1[:, None, 2:], box2[:, 2:])  # [A, B, 2], coordinates right-bottom
 
-    wh = tf.maximum(right_bottom - left_top+1, 0)                       # [N,M,2]
-    inter = wh[:,:,0] * wh[:,:,1]                                       # [N,M]
-
-    area1 = (box1[:,2] + 1) * (box1[:,3] + 1)                           # [N, ]
-    area2 = (box2[:,2] + 1) * (box2[:,3] + 1)                           # [M, ]
-    iou = inter / (area1[:,None] + area2 - inter)                       # [N,M]
+    wh = tf.clip_by_value(rb - lt,  # [A, B, 2], only clip the minimum
+                          clip_value_min=0, clip_value_max=tf.float32.max)
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [A, B]
+    area1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])  # [A,]
+    area2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])  # [B,]
+    iou = inter / (area1[:, None] + area2 - inter)
     return iou
 
-def box_nms(boxes, scores, threshold=0.5):
-    '''Non maximum suppresion
+
+def box_nms(bboxes, scores, threshold=0.5, mode='union'):
+    """Non maximum suppression.
     Args:
-        bboxes: (tensor) bounding boxes, sized[N,4]
-        scores: (tensor) bbox scores, sized[N, ]
-        threhold: (float) overlap threshold
+      bboxes: (tensor) bounding boxes, sized [N,4].
+      scores: (tensor) bbox scores, sized [N,].
+      threshold: (float) overlap threshold.
+      mode: (str) 'union' or 'min'.
     Returns:
-        keep: (tensor) selected indices
+      keep: (tensor) selected indices.
     Reference:
-        https://github.com/rbgirshick/py-faster-rcnn/blob/master/lib/nms/py_cpu_nms.py  
-    '''
-    try:
-        x1 = boxes[:, 0]
-        y1 = boxes[:, 1]
-        x2 = boxes[:, 2]
-        y2 = boxes[:, 3]
-    except:
-        pdb.set_trace()
+      https://github.com/rbgirshick/py-faster-rcnn/blob/master/lib/nms/py_cpu_nms.py
+    """
+    x1 = bboxes[:, 0]
+    y1 = bboxes[:, 1]
+    x2 = bboxes[:, 2]
+    y2 = bboxes[:, 3]
 
-    areas = (x2 - x1 + 1) * (y2-y1+1)
-    _, order = scores.sort(0, descending = True)
+    areas = (x2 - x1) * (y2 - y1)
+    order = argsort(scores.numpy())[::-1]
 
-    keep_order = []
-    while order.numel() > 0:
+    keep = []
+    while len(order) > 0:
         i = order[0]
-        keep_order.append(i)
+        keep.append(i)
 
-        if order.numel() == 1:
+        if len(order) == 1:
             break
 
-        # pdb.set_trace()
+        xx1 = tf.clip_by_value(tf.gather(x1, order[1:]), clip_value_min=x1[i], clip_value_max=tf.float32.max)
+        yy1 = tf.clip_by_value(tf.gather(y1, order[1:]), clip_value_min=y1[i], clip_value_max=tf.float32.max)
+        xx2 = tf.clip_by_value(tf.gather(x2, order[1:]), clip_value_min=x2[i], clip_value_max=tf.float32.max)
+        yy2 = tf.clip_by_value(tf.gather(y2, order[1:]), clip_value_min=y2[i], clip_value_max=tf.float32.max)
 
-        inter_x1 = x1[order[1:]].clamp(min=float(x1[i]))
-        inter_y1 = y1[order[1:]].clamp(min=float(y1[i]))
-        inter_x2 = x1[order[1:]].clamp(min=float(x2[i]))
-        inter_y2 = y1[order[1:]].clamp(min=float(y2[i]))
+        w = tf.clip_by_value(xx2 - xx1, clip_value_min=0, clip_value_max=tf.float32.max)
+        h = tf.clip_by_value(yy2 - yy1, clip_value_min=0, clip_value_max=tf.float32.max)
+        inter = w * h
 
-        inter_w = tf.maximum(inter_x2 - inter_x1 + 1, 0)
-        inter_h = tf.maximum(inter_y2 - inter_y1 + 1, 0)
-        inter = inter_w * inter_h
+        if mode == 'union':
+            ovr = inter / (areas[i] + tf.gather(areas, order[1:]) - inter)
+        elif mode == 'min':
+            ovr = inter / tf.clip_by_value(tf.gather(areas, order[1:]),
+                                           clip_value_min=tf.float32.min, clip_value_max=areas[i])
+        else:
+            raise TypeError('Unknown nms mode: %s.' % mode)
 
-        over = inter / (areas[i] + areas[order[1:]] - inter)
-
-        ids = (over <= threshold).nonzero().squeeze()
-        if ids.numel() == 0:
+        ids = tf.squeeze(tf.where(tf.less_equal(ovr, threshold)))
+        if len(ids.get_shape().as_list()) == 0:
             break
-        order = order[ids+1]
-
-    return tf.convert_to_tensor(keep_order)
-        
-def one_hot_embedding(labels, num_classes):
-    '''Embedding labels to one-hot form
-    Args:
-        labels: (LongTensor) class labels, sized [#labels,]
-        num_classes: (int) number of classes
-    Return:
-        one_hot_label: (tensor) encoded labels, size [#labels, #classes]
-    '''
-#     one_hot = torch.eye(num_classes)            # [#classes, #classes]
-    return tf.one_hot(labels, num_classes)            # [#labels,  #classes]
-
-def freeze_bn(model):
-    '''Freeze models BN parameter
-    Args:
-        model: (nn.Module) 
-    Return:
-        model: (nn.Module) freezed BN model
-    '''
-    for layer in model.modules():
-        if isinstance(layer, nn.BatchNorm2d):
-            layer.eval()
+        order = order[ids + 1]
+    return tf.cast(keep, tf.int32)
