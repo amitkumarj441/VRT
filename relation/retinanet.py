@@ -1,21 +1,15 @@
 import tensorflow as tf
 from resnet import *
-
+from resnet import RetinaNet_FPN101
 slim = tf.contrib.slim
 class RetinaNet():
     """ RetinaNet defined in Focal loss paper
      See: https://arxiv.org/pdf/1708.02002.pdf
     """
     def __init__(self, inputs, sess, num_classes=62, num_anchors=9, scope=None, reuse=None):
-        arg_scope = resnet_arg_scope()
-        with slim.arg_scope(arg_scope):
-           output_101, _ = resnet_v2_101(input_image, is_training=True)
-    
-           checkpoint_path = 'resnet_v2_101.ckpt'
-           saver = tf.train.Saver(tf.global_variables)
-           saver.restore(sess, checkpoint_path)
+           
 
-        self.resnet = output_101
+        self.feature_maps = RetinaNet_FPN101(inputs)
 
         self._num_classes = num_classes
         self._num_anchors = num_anchors
@@ -36,15 +30,18 @@ class RetinaNet():
 
     def forward(self, inputs):
         batch_size = tf.shape(inputs)[0]
-        feature_maps = self.resnet
-        loc_prediction = self.add_fcn_head(feature_map,
-                                            self._num_anchors * 4,
-                                            "Box")
-        class_prediction = self.add_fcn_head(feature_map,
-                                              self._num_anchors*self._num_classes,
-                                              "Class")
-        loc_prediction = tf.reshape(loc_prediction, [batch_size, -1, 4])
-        class_prediction = tf.reshape(class_prediction, [batch_size, -1, self._num_classes])
-        
-        return loc_prediction, class_prediction
+        loc_predictions = []
+        class_predictions = []
+        for idx, feature_map in enumerate(self.feature_maps):
+            loc_prediction = self._add_fcn_head(feature_map,
+                                                self._num_anchors * 4,
+                                                "Box")
+            class_prediction = self._add_fcn_head(feature_map,
+                                                  self._num_anchors*self._num_classes,
+                                                  "Class")
+            loc_prediction = tf.reshape(loc_prediction, [batch_size, -1, 4])
+            class_prediction = tf.reshape(class_prediction, [batch_size, -1, self._num_classes])
+            loc_predictions.append(loc_prediction)
+            class_predictions.append(class_prediction)
+        return tf.concat(loc_predictions, axis=1), tf.concat(class_predictions, axis=1)
       
