@@ -61,6 +61,8 @@ def main():
     max_scale = 1000
     image_size = 608
     anchor_num = 9
+    
+    num_feature_maps = 5
 
     use_pretrained = False
     
@@ -109,14 +111,12 @@ def main():
     with tf.Session() as sess:
 
         input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
-        label_class = tf.placeholder(tf.float32, [batch_size, anchor_num, num_classes])
-        label_loc = tf.placeholder(tf.float32, [batch_size, anchor_num, 4])
+        label_class = tf.placeholder(tf.float32, [num_feature_maps, batch_size, anchor_num, num_classes])
+        label_loc = tf.placeholder(tf.float32, [num_feature_maps, batch_size, anchor_num, 4])
 
         # setting network
         net = RetinaNet(input_image)
         pred_loc, pred_class = net.output
-
-        print(pred_class.shape, pred_loc.shape)
 
         if use_pretrained:
             checkpoint_path = 'resnet_v2_101.ckpt'
@@ -182,20 +182,6 @@ def main():
                     'cls_loss': batch_loss[1]}
                 for tag, value in info.items():
                     logger.scalar_summary(tag, value, step)
-
-            # if iteration % 1000 == 0:
-            #     test_loss=[]
-            #     for i in range(10):
-                    
-            #         test_loss.append(sess.run( loss, feed_dict={input_image: img, label_class: class_labels, label_loc: location_labels}))
-            #     test_loss=np.array(test_loss)
-            #     print('Validation cost after epoch '+str(epoch)+':  ', 'total_loss:', , 'cls_loss:', batch_loss[0], \
-            #           'loc_loss:', batch_loss[1], 'time_spent:', end_time-start_time )
-            #     info = {'training loss': batch_loss, 'loc_loss': batch_loss[0], \
-            #         'cls_loss': batch_loss[1]}
-            #     for tag, value in info.items():
-            #         logger.scalar_summary(tag, value, step)
-
 
             if iteration % 1000 == 0:
                 name = 'retinanet.ckpt'
