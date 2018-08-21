@@ -1,6 +1,6 @@
 import math
 import tensorflow as tf
-from retinanet_utils import meshgrid, box_iou, box_nms, change_box_order
+from anchor.retinanet_utils import meshgrid, box_iou, box_nms, change_box_order
 import numpy as np
 
 def _make_list_input_size(input_size):
