@@ -11,7 +11,7 @@ def create_one_hot(labels, num_classes, label_index):
      Return:
          one_hot_label: (tensor) encoded labels, size [#labels, #classes]
      '''
-    return slim.one_hot_encoding(label_indexes, num_classes)
+     return slim.one_hot_encoding(label_indexes, num_classes)
   
 # class loss
 def focal_loss(onehot_labels, cls_preds,
@@ -56,14 +56,3 @@ def regression_loss(pred_boxes, gt_boxes, weights):
     """
     loss = tf.reduce_sum(tf.square(pred_boxes-gt_boxes))
     return loss
-
-
-def test():
-    logits = tf.convert_to_tensor([[0.2, 0.3, 0.4, 0.5], [0.5, 0.4, 0.3, 0.2]])
-    labels = slim.one_hot_encoding([1, 2], 4)
-    bbox = tf.ones_like(logits)
-    with tf.Session() as sess:
-        print sess.run(logits)
-        print sess.run(focal_loss(onehot_labels=labels, cls_preds=logits))
-        print sess.run(regression_loss(logits, bbox, tf.expand_dims(1./tf.convert_to_tensor([2, 3], dtype=tf.float32), 1)))
-    sess.close()
