@@ -2,17 +2,14 @@ import os
 import pdb
 import random
 
-import torch
-from torch.utils.data import Dataset
-import torchvision.transforms as transforms
 import numpy as np
 from PIL import Image, ImageDraw
-
+import tensorflow as tf
 from encoder import DataEncoder
 
 from transform import resize, center_crop, random_crop, random_flip
 
-class OpenImagesDataset(data.Dataset):
+class OpenImagesDataset():
     
     def __init__(self, root, list_file, transform, train=False, input_size=600):
         """
@@ -33,6 +30,9 @@ class OpenImagesDataset(data.Dataset):
         self.labels = []
 
         self.encoder = DataEncoder()
+        all_records = []
+        for i in range(1):
+            all_records.append('gs://detectionchallenge/retinanet_train'+str(i)+'.tfrecords')
 
         with open(list_file) as f:
             lines = f.readlines()
@@ -51,8 +51,8 @@ class OpenImagesDataset(data.Dataset):
                 c, xmin, ymin, xmax, ymax = bboxes[i]
                 box.append([float(xmin), float(ymin), float(xmax), float(ymax)])
                 label.append(int(c))
-            self.boxes.append(torch.Tensor(box))
-            self.labels.append(torch.LongTensor(label))
+            self.boxes.append(box)
+            self.labels.append(label)
 
     def __getitem__(self, idx):
         """
@@ -62,11 +62,11 @@ class OpenImagesDataset(data.Dataset):
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        boxes = self.boxes[idx].clone()
+        boxes = self.boxes[idx].copy()
         # converting ratios into numbers
         w,h = img.size
-        boxes = boxes * torch.Tensor([w,h,w,h])
-        labels = self.labels[idx].clone()
+        boxes = boxes * tf.convert_to_tensor([w,h,w,h])
+        labels = self.labels[idx].copy()
         size = self.input_size
 
         #Data Augmentation
@@ -78,7 +78,7 @@ class OpenImagesDataset(data.Dataset):
             img, boxes = resize(img, boxes, (size,size))
             #img, boxes = center_crop(img, boxes, (size,size))
         
-        img = self.transform(img)
+#         img = self.transform(img)
         return img, boxes, labels        
 
     def __len__(self):
@@ -98,7 +98,7 @@ class OpenImagesDataset(data.Dataset):
 
         h = w = self.input_size
         num_imgs = len(imgs)
-        inputs = torch.zeros(num_imgs, 3, h, w)
+        inputs = tf.zeros([num_imgs, h, w, 3])
 
         loc_targets = []
         cls_targets = []
@@ -107,4 +107,4 @@ class OpenImagesDataset(data.Dataset):
             loc_target, cls_target = self.encoder.encode(boxes[i], labels[i], input_size=(w,h))
             loc_targets.append(loc_target)
             cls_targets.append(cls_target)
-        return inputs, torch.stack(loc_targets), torch.stack(cls_targets)
+        return inputs, tf.stack(loc_targets), tf.stack(cls_targets)
