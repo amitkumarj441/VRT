@@ -5,7 +5,7 @@ class RetinaNet():
     """ RetinaNet defined in Focal loss paper
      See: https://arxiv.org/pdf/1708.02002.pdf
     """
-    def __init__(self, inputs, sess, num_classes=62, num_anchors=9, scope=None, reuse=None):
+    def __init__(self, inputs, num_classes=62, num_anchors=9, scope=None, reuse=None):
            
 
         self.feature_maps = RetinaNet_FPN101(inputs)
@@ -16,7 +16,7 @@ class RetinaNet():
         self._reuse = reuse
         self.output = self.forward(inputs)
 
-    def add_fcn_head(self, inputs, output_planes, head_offset):
+    def _add_fcn_head(self, inputs, output_planes, head_offset):
         """
         inputs: a [batch, height, width, channels] float tensor
         output_planes: # of outputs dim
@@ -42,5 +42,7 @@ class RetinaNet():
             class_prediction = tf.reshape(class_prediction, [batch_size, -1, self._num_classes])
             loc_predictions.append(loc_prediction)
             class_predictions.append(class_prediction)
-        return tf.concat(loc_predictions, axis=1), tf.concat(class_predictions, axis=1)
+        a = tf.concat(loc_predictions, axis=1)
+        b = tf.concat(class_predictions, axis=1)
+        return a, b
       
