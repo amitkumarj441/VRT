@@ -12,7 +12,7 @@ from anchor.anchor_generator import BoxEncoder
 
 train_records=[]
 test_records=[]
-for i in range(100):
+for i in range(32):
     train_records.append('gs://detectionchallenge/train_retinanet_big'+str(i)+'.tfrecords')
 
 
