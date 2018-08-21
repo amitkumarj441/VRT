@@ -1,9 +1,9 @@
 import pdb
 import math
 
-import torch
-import torch.nn as nn
-
+# import torch
+# import torch.nn as nn
+import tensorflow as tf
 def meshgrid(x, y, row_major=True):
     '''Return meshgrid in  range x& y
     Args:
@@ -22,8 +22,11 @@ def meshgrid(x, y, row_major=True):
     2 1                 1 2
     '''
 
-    w = torch.arange(0,x)
-    h = torch.arange(0,y)
+#     w = torch.arange(0,x)
+#     h = torch.arange(0,y)
+    w = tf.range(x)
+    h = tf.range(y)
+    
     xx = w.repeat(y).view(-1,1)
     yy = h.view(-1,1).repeat(1,x).view(-1,1)
     if row_major:
@@ -45,8 +48,8 @@ def change_box_order(boxes, order):
     a = boxes[:,:2]
     b = boxes[:,2:]
     if order == 'xyxy2xywh':
-        return torch.cat([(a+b)/2, b-a+1], 1)
-    return torch.cat([a-b/2,a+b/2], 1)
+        return tf.concat([(a+b)/2, b-a+1], 1)
+    return tf.concat([a-b/2,a+b/2], 1)
 
 def box_ious(box1, box2, order='xywh'):
     '''Compute the intersection over union of two set of boxes
@@ -61,10 +64,10 @@ def box_ious(box1, box2, order='xywh'):
         box1_coor = change_box_order(box1, 'xywh2xyxy')
         box2_coor = change_box_order(box2, 'xywh2xyxy')
 
-    left_top = torch.max(box1_coor[:,None, :2], box2_coor[:,:2])        # [N,M,2]
-    right_bottom = torch.min(box1_coor[:,None, 2:], box2_coor[:,2:])    # [N,M,2]
+    left_top = tf.maximum(box1_coor[:,None, :2], box2_coor[:,:2])        # [N,M,2]
+    right_bottom = tf.minimum(box1_coor[:,None, 2:], box2_coor[:,2:])    # [N,M,2]
 
-    wh = (right_bottom - left_top+1).clamp(min=0)                       # [N,M,2]
+    wh = tf.maximum(right_bottom - left_top+1, 0)                       # [N,M,2]
     inter = wh[:,:,0] * wh[:,:,1]                                       # [N,M]
 
     area1 = (box1[:,2] + 1) * (box1[:,3] + 1)                           # [N, ]
@@ -109,8 +112,8 @@ def box_nms(boxes, scores, threshold=0.5):
         inter_x2 = x1[order[1:]].clamp(min=float(x2[i]))
         inter_y2 = y1[order[1:]].clamp(min=float(y2[i]))
 
-        inter_w = (inter_x2 - inter_x1 + 1).clamp(min=0)
-        inter_h = (inter_y2 - inter_y1 + 1).clamp(min=0)
+        inter_w = tf.maximum(inter_x2 - inter_x1 + 1, 0)
+        inter_h = tf.maximum(inter_y2 - inter_y1 + 1, 0)
         inter = inter_w * inter_h
 
         over = inter / (areas[i] + areas[order[1:]] - inter)
@@ -120,7 +123,7 @@ def box_nms(boxes, scores, threshold=0.5):
             break
         order = order[ids+1]
 
-    return torch.LongTensor(keep_order)
+    return tf.convert_to_tensor(keep_order)
         
 def one_hot_embedding(labels, num_classes):
     '''Embedding labels to one-hot form
@@ -130,8 +133,8 @@ def one_hot_embedding(labels, num_classes):
     Return:
         one_hot_label: (tensor) encoded labels, size [#labels, #classes]
     '''
-    one_hot = torch.eye(num_classes)            # [#classes, #classes]
-    return one_hot[labels.long()]               # [#labels,  #classes]
+#     one_hot = torch.eye(num_classes)            # [#classes, #classes]
+    return tf.one_hot(labels, num_classes)            # [#labels,  #classes]
 
 def freeze_bn(model):
     '''Freeze models BN parameter
