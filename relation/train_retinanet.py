@@ -207,6 +207,8 @@ def main():
                 name = 'retinanet.ckpt'
                 saver.save( sess, os.path.join( traindir, name ), global_step = epoch)
 
-
+        coord.request_stop()
+        coord.join(threads)
+        sess.close()
 if __name__ == '__main__':
     main()
