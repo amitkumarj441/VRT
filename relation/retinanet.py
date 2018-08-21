@@ -6,31 +6,22 @@ class RetinaNet():
     """ RetinaNet defined in Focal loss paper
      See: https://arxiv.org/pdf/1708.02002.pdf
     """
-    def __init__(self):
+    def __init__(self, inputs, sess, num_classes=62, num_anchors=9, scope=None, reuse=None):
         arg_scope = resnet_arg_scope()
         with slim.arg_scope(arg_scope):
            output_101, _ = resnet_v2_101(input_image, is_training=True)
     
-          sess=tf.Session()
-          checkpoint_path = 'resnet_v2_101.ckpt'
-          saver = tf.train.Saver(tf.global_variables)
-          saver.restore(sess, checkpoint_path)
-          sess.close()
-        self.resnet101 = output_101
+           checkpoint_path = 'resnet_v2_101.ckpt'
+           saver = tf.train.Saver(tf.global_variables)
+           saver.restore(sess, checkpoint_path)
 
-    def __call__(self, inputs, num_classes, num_anchors=9, scope=None, reuse=None):
-        """
-        Args:
-            num_classes: # of classification classes
-            num_anchors: # of anchors in each feature map
-        """
+        self.resnet = output_101
+
         self._num_classes = num_classes
         self._num_anchors = num_anchors
         self._scope = scope
         self._reuse = reuse
-        result = []
-        result.append(self.forward(inputs))
-        return self.forward(inputs)
+        self.output = self.forward(inputs)
 
     def add_fcn_head(self, inputs, output_planes, head_offset):
         """
