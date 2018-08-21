@@ -1,5 +1,4 @@
 import tensorflow as tf
-from resnet import *
 from resnet import RetinaNet_FPN101
 slim = tf.contrib.slim
 class RetinaNet():
@@ -29,7 +28,7 @@ class RetinaNet():
         return net
 
     def forward(self, inputs):
-        batch_size = tf.shape(inputs)[0]
+        batch_size = inputs.shape[0]
         loc_predictions = []
         class_predictions = []
         for idx, feature_map in enumerate(self.feature_maps):
