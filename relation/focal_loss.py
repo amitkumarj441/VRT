@@ -54,8 +54,7 @@ def regression_loss(pred_boxes, gt_boxes, weights):
         gt_boxes: [# anchors, 4]
         weights: Tensor of weights multiplied by loss with shape [# anchors]
     """
-    loss = tf.losses.huber_loss(predictions=pred_boxes, labels=gt_boxes,
-                                weights=weights, scope='box_loss')
+    loss = tf.reduce_sum(tf.square(pred_boxes-gt_boxes))
     return loss
 
 
