@@ -2,14 +2,15 @@ import math
 import tensorflow as tf
 from anchor.retinanet_utils import meshgrid, box_iou, box_nms, change_box_order
 import numpy as np
+import time
 
 def _make_list_input_size(input_size):
     input_size = [input_size] * 2 if isinstance(input_size, int) else input_size
-    return tf.cast(input_size, tf.float32)
+    return np.array(input_size).astype(np.float32)
 
 class BoxEncoder:
-    def __init__(self):
-        self.anchor_areas = [19 * 19., 38 * 38., 76 * 76., 152 * 152., 304 * 304.]  # p3 -> p7
+    def __init__(self, image_size=608):
+        self.anchor_areas = [image_size/32.0 * image_size/32.0, image_size/16.0 * image_size/16.0, image_size/8.0 * image_size/8.0, image_size/4.0 * image_size/4.0, image_size/2.0 * image_size/2.0]  # p3 -> p7
         self.aspect_ratios = [1 / 2., 1 / 1., 2 / 1.]
         self.scale_ratios = [1., pow(2, 1 / 3.), pow(2, 2 / 3.)]
         self.anchor_wh = self._get_anchor_wh()
@@ -39,6 +40,7 @@ class BoxEncoder:
             boxes: (list) anchor boxes for each feature map. Each of size [#anchors, 4],
                           where #anchors = fmw * fmh * #anchors_per_cell
         """
+        input_size = tf.convert_to_tensor(_make_list_input_size(input_size))
         num_fms = len(self.anchor_areas)
         fm_sizes = [(tf.ceil(input_size[0] / pow(2., i + 3)), tf.ceil(input_size[1] / pow(2., i + 3)))
                     for i in range(num_fms)]  # TODO modify by p3 -> p7 feature map sizes
@@ -54,7 +56,7 @@ class BoxEncoder:
             boxes.append(tf.reshape(box, [-1, 4]))
         return tf.concat(boxes, 0)
 
-    def encode(self, boxes, labels, input_size):
+    def encode(self, boxes, labels, input_size, anchor_boxes):
         """Encode target bounding boxes and class labels.
         Args:
             boxes: (tensor) bounding boxes of (xmin, ymin, xmax, ymax), sized [#obj, 4].
@@ -65,26 +67,55 @@ class BoxEncoder:
             cls_trues: (tensor) encoded class labels, sized [#anchors, ].
         """
         input_size = _make_list_input_size(input_size)
-        boxes = tf.reshape(boxes, [-1, 4])
-        anchor_boxes = self._get_anchor_boxes(input_size)
+        boxes = np.reshape(boxes, [-1, 4])
+
+        # print('ela:', time.time()-start)
 
         boxes = change_box_order(boxes, 'xyxy2xywh')
-        boxes *= tf.tile(input_size, [2])  # scaled back to original size
+        boxes *= np.tile(input_size, [2])  # scaled back to original size
+
+        # print('ela:', time.time()-start)
 
         ious = box_iou(anchor_boxes, boxes, order='xywh')
-        max_ids = tf.argmax(ious, axis=1)
-        max_ious = tf.reduce_max(ious, axis=1)
+        max_ids = np.argmax(ious, axis=1)
+        max_ious = np.max(ious, axis=1)
 
-        boxes = tf.gather(boxes, max_ids)  # broadcast automatically, [#anchors, 4]
+        boxes = np.take(boxes, max_ids, 0)  # broadcast automatically, [#anchors, 4]
 
         loc_xy = (boxes[:, :2] - anchor_boxes[:, :2]) / anchor_boxes[:, 2:]
-        loc_wh = tf.log(boxes[:, 2:] / anchor_boxes[:, 2:])
-        loc_trues = tf.concat([loc_xy, loc_wh], 1)
-        cls_trues = tf.gather(labels, max_ids)  # TODO: check if needs add 1 here
-        cls_trues = tf.where(max_ious < 0.5, tf.zeros_like(cls_trues), cls_trues)
+        loc_wh = np.log(boxes[:, 2:] / anchor_boxes[:, 2:])
+        loc_trues = np.concatenate((loc_xy, loc_wh), 1)
+        cls_trues = np.take(labels, max_ids, 0)+1  # TODO: check if needs add 1 here
+        cls_trues = np.where(max_ious < 0.5, np.zeros_like(cls_trues), cls_trues)
         ignore = (max_ious > 0.4) & (max_ious < 0.5)  # ignore ious between (0.4, 0.5), and marked as -1
-        cls_trues = tf.where(ignore, tf.ones_like(cls_trues) * -1, cls_trues)
-        cls_trues = tf.cast(cls_trues, tf.float32)
+        cls_trues = np.where(ignore, np.ones_like(cls_trues) * -1, cls_trues)
+        cls_trues = cls_trues.astype(np.float32)    
+        # input_size = _make_list_input_size(input_size)
+        # boxes = tf.reshape(boxes, [-1, 4])
+
+        # # print('ela:', time.time()-start)
+
+        # boxes = change_box_order(boxes, 'xyxy2xywh')
+        # boxes *= tf.tile(input_size, [2])  # scaled back to original size
+
+        # # print('ela:', time.time()-start)
+
+        # ious = box_iou(anchor_boxes, boxes, order='xywh')
+        # max_ids = tf.argmax(ious, axis=1)
+        # max_ious = tf.reduce_max(ious, axis=1)
+
+        
+        # start=time.time()
+        # boxes = tf.gather(boxes, max_ids)  # broadcast automatically, [#anchors, 4]
+
+        # loc_xy = (boxes[:, :2] - anchor_boxes[:, :2]) / anchor_boxes[:, 2:]
+        # loc_wh = tf.log(boxes[:, 2:] / anchor_boxes[:, 2:])
+        # loc_trues = tf.concat([loc_xy, loc_wh], 1)
+        # cls_trues = tf.gather(labels, max_ids)  # TODO: check if needs add 1 here
+        # cls_trues = tf.where(max_ious < 0.5, tf.zeros_like(cls_trues), cls_trues)
+        # ignore = (max_ious > 0.4) & (max_ious < 0.5)  # ignore ious between (0.4, 0.5), and marked as -1
+        # cls_trues = tf.where(ignore, tf.ones_like(cls_trues) * -1, cls_trues)
+        # cls_trues = tf.cast(cls_trues, tf.float32)
         return loc_trues, cls_trues
 
     def decode(self, loc_preds, cls_preds,
@@ -130,10 +161,10 @@ class BoxEncoder:
         ids = tf.cast(score > cls_thred, tf.int32)
         ids = tf.where(tf.not_equal(ids, 0))
 
-        if not ids.numpy().any():  # Fail to detect, choose the max score
-            ids = tf.expand_dims(tf.argmax(score), axis=-1)
-        else:
-            ids = tf.squeeze(ids, -1)
+        #if not ids.eval().any():  # Fail to detect, choose the max score
+         #   ids = tf.expand_dims(tf.argmax(score), axis=-1)
+        #else:
+        ids = tf.squeeze(ids, -1)
         if tf_box_order:
             # [ymin, xmin, ymax, xmax]
             boxes = tf.transpose(tf.gather(tf.transpose(boxes), [1, 0, 3, 2]))
@@ -187,16 +218,18 @@ class BoxEncoder:
             if scores.shape[0] == 0:
                 return [None] * 3
             max_score_id = tf.argmax(scores)
-            batch_loc.append(tf.gather(loc, max_score_id).numpy() / input_size[0])
+            batch_loc.append(tf.gather(loc, max_score_id).eval() / input_size[0])
             for item in ['cls', 'scores']:
-                eval('batch_' + item).append(tf.gather(eval(item), max_score_id).numpy())
+                eval('batch_' + item).append(tf.gather(eval(item), max_score_id).eval())
         return [tf.convert_to_tensor(item, dtype=tf.float32) for item in [batch_loc, batch_cls, batch_scores]]
 
 
-# a=BoxEncoder()
-# locs = np.zeros([8, 4], dtype=np.float32)
-# classes = np.ones([8, ])
-# loct, clt = a.encode(locs, classes, (608, 608))
+# with tf.Session():
+#     a=BoxEncoder(608)
+#     anchors = a._get_anchor_boxes(608).eval()
+#     locs = np.zeros([3, 4], np.float32)
+#     classes = np.ones([3, ])
+#     loct, clt = a.encode(locs, classes, (608, 608), anchors)
 
-# print(loct.shape, clt.shape)
+#     print(loct, clt, loct.shape, clt.shape)
 
