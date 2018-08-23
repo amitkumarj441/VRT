@@ -9,13 +9,48 @@ from retinanet import *   # Import model
 from focal_loss import *
 from logger import Logger
 from anchor.anchor_generator import BoxEncoder
+import numpy as np
+
+train_records=[]
+test_records=[]
+for i in range(12):
+    train_records.append('gs://detectionchallenge/relationship'+str(i)+'.tfrecords')
 
 
-def read_record(image_size=608, batch_size=8):
-    train_records=[]
-    test_records=[]
-    for i in range(12):
-        train_records.append('gs://detectionchallenge/relationship'+str(i)+'.tfrecords')
+def get_batch(train_images, train_labels):
+    img, las = sess.run([train_images, train_labels])
+    indices = np.array(las.indices)
+    indices = np.reshape(indices, [int(np.ceil(len(indices)/11)),11, 2])
+    las = np.array(las.values)
+    las = np.reshape(las, [int(np.ceil(len(las)/11)), 11])
+    batches = []
+    temp_list = []
+    for i in range(len(las)):
+        if i > 0 and indices[i][0][0] != indices[i-1][0][0]:
+            batches.append(temp_list)
+            temp_list = []
+        temp_list.append(las[i])
+        if i==len(las)-1:
+            batches.append(temp_list)
+
+    cls_labels = []
+    loc_labels = []
+    for i in range(len(batches)):
+        temp = np.array(batches[i])
+#                print(temp.shape)
+        labels = temp[:, 0].tolist()+temp[:, 1].tolist()
+        bboxes = temp[:, 2:6].tolist()+temp[:, 6:10].tolist()
+
+        loc_trues, cls_trues = encoder.encode(bboxes, np.array(labels), image_size, anchor_boxes)
+        loc_trues = loc_trues
+        cls_trues = cls_trues.astype(np.int)
+        lis=np.reshape(np.insert(np.eye(num_classes),0,np.zeros([num_classes])), [-1, num_classes])
+        cls_trues = lis[cls_trues].astype(np.float32)
+        cls_labels.append(cls_trues)
+        loc_labels.append(loc_trues)
+    return cls_labels, loc_labels
+
+def read_record(records, image_size=386, batch_size=8):
     feature = {"label": tf.VarLenFeature(tf.float32), "img_raw": tf.FixedLenFeature([], tf.string)}
     reader = tf.TFRecordReader()
     filename_queue = tf.train.string_input_producer(records)
@@ -30,7 +65,7 @@ def read_record(image_size=608, batch_size=8):
     
     label = features['label']
     logging.info('read2')
-    images, labels = tf.train.batch([image, label], batch_size=batch_size, capacity=30, num_threads=1)
+    images, labels = tf.train.shuffle_batch([image, label], batch_size=batch_size, capacity=30, num_threads=1, min_after_dequeue=10)
     return images, labels
 
 
@@ -39,15 +74,15 @@ def main():
     parser.add_argument('--data_name','-data_name',type=str,default='OpenImages')
     parser.add_argument('--weights','-w',type=str,default='None')
     parser.add_argument('--lr_decay_method','-lrm',type=str,default='retina')
-    parser.add_argument('--opt','-opt',type=str,default='SGD')  
+    parser.add_argument('--opt','-opt',type=str,default='Adam')  
     parser.add_argument('--debug','-d',type=str,default='False')
     parser.add_argument('--start_epoch',type=int,default=0)
     parser.add_argument('--num-workers', '-n', type=int, default=os.cpu_count())
     args = parser.parse_args()
 
     num_workers = os.cpu_count()
-    batch_size = 8 
-    lr_feed = 0.001
+    batch_size = 6
+    lr_feed = 0.0001
     momentum = 0.9
     weight_decay = 1e-4
     gpus = [0, 1]
@@ -123,14 +158,14 @@ def main():
     else: print('==>>wrong opt name')
 
     # setting loss
-    f_loss = focal_loss(label_class, pred_class)
-    r_loss = regression_loss(label_loc, pred_loc)
+    f_loss = focal_loss(label_class, pred_class)/batch_size
+    r_loss = regression_loss(label_loc, pred_loc)/batch_size
     loss = f_loss + r_loss
     op = optimizer.minimize(loss)
     
     with tf.Session() as sess:
 
-        train_images,train_labels=read_record(train_records, 608, batch_size)
+        train_images,train_labels=read_record(train_records, image_size, batch_size)
 
         init = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
@@ -154,57 +189,32 @@ def main():
         start_time = time.time()
 
         encoder = BoxEncoder()
-        for iteration in range(args.start_epoch, total_epoch):
-            img, las = sess.run([train_images, train_labels])
-            # class_labels, location_labels = preparer.prepare_data(las)
-            indices = np.array(las.indices)
-            indices = np.reshape(indices, [int(np.ceil(len(indices)/6)), 6, 2])
-            las = np.array(las.values)
-            las = np.reshape(las, [int(np.ceil(len(las)/6)), 6])
-            batches = []
-            temp_list = []
-            for i in range(len(las)):
-                if i > 0 and indices[i][0][0] != indices[i-1][0][0]:
-                    batches.append(temp_list)
-                    temp_list = []
-                temp_list.append(las[i])
-                if i==len(las)-1:
-                    batches.append(temp_list)
-
-           cls_labels = []
-           loc_labels = []
-           for i in range(len(batches)):
-                temp = np.array(batches[i])
-                labels = temp[i][:, 0]
-                bboxes = temp[i][:, 1:]
-
-                loc_trues, cls_trues = encoder.encode(bboxes, labels)
-                print(loc_trues.shape, cls_trues.shape)
-                loc_trues = tf.one_hot(loc_trues, depth=num_classes).eval()
-                cls_trues = cls_trues.eval()
-                
-                cls_labels.append(cls_trues)
-                loc_labels.append(loc_trues)
+        anchor_boxes = encoder._get_anchor_boxes(image_size).eval()
+        for iteration in range(15001, total_epoch):
+            start_time = time.time()
+            
+            cls_labels, loc_labels = get_batch(train_images, train_labels)
 
             if iteration in decay_epochs:
                 lr_feed*=0.5
-            
+            if len(loc_labels)!=batch_size or len(cls_labels)!=batch_size:
+                continue
             sess.run(op, feed_dict={input_image: img, label_class: cls_labels, label_loc: loc_labels, lr: lr_feed})
             
             if iteration % 10 == 0:
                 batch_loss = sess.run( [f_loss, r_loss], feed_dict={input_image: img, label_class: cls_labels, label_loc: loc_labels})
                 end_time = time.time()
                 
-                print('Cost after epoch '+str(epoch)+':  ', 'total_loss:', batch_loss, 'cls_loss:', batch_loss[0], \
+                print('Cost after iteration '+str(iteration)+':  ', 'total_loss:', batch_loss, 'cls_loss:', batch_loss[0], \
                       'loc_loss:', batch_loss[1], 'time_spent:', end_time-start_time )
-                info = {'training loss': batch_loss, 'loc_loss': batch_loss[0], \
-                    'cls_loss': batch_loss[1]}
-                for tag, value in info.items():
-                    logger.scalar_summary(tag, value, step)
-
+                #info = {'training loss': batch_loss, 'loc_loss': batch_loss[0], \
+                 #   'cls_loss': batch_loss[1]}
+                #for tag, value in info.items():
+                 #   logger.scalar_summary(tag, value, step)
+                #lll=encoder.decode(pred_loc[0], pred_class[0])
             if iteration % 1000 == 0:
                 name = 'retinanet.ckpt'
-                saver.save( sess, os.path.join( traindir, name ), global_step = epoch)
+                saver.save( sess, os.path.join( traindir, name ), global_step = iteration)
 
         coord.request_stop()
         coord.join(threads)
