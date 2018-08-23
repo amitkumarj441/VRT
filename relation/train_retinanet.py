@@ -10,13 +10,12 @@ from focal_loss import *
 from logger import Logger
 from anchor.anchor_generator import BoxEncoder
 
-train_records=[]
-test_records=[]
-for i in range(32):
-    train_records.append('gs://detectionchallenge/train_retinanet_big'+str(i)+'.tfrecords')
 
-
-def read_record(records, image_size=608, batch_size=8):
+def read_record(image_size=608, batch_size=8):
+    train_records=[]
+    test_records=[]
+    for i in range(12):
+        train_records.append('gs://detectionchallenge/relationship'+str(i)+'.tfrecords')
     feature = {"label": tf.VarLenFeature(tf.float32), "img_raw": tf.FixedLenFeature([], tf.string)}
     reader = tf.TFRecordReader()
     filename_queue = tf.train.string_input_producer(records)
