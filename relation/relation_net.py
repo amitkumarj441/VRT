@@ -2,7 +2,7 @@ from retinanet import *
 
 from roi_pooling.roi_pooling_ops import roi_pooling
 
-def relation_net(locations, class_labels, relation_numbers=9, texture_num=5, use_obj=True, use_so=False):
+def relation_net(locations, class_labels, relation_numbers=9, texture_num=5, obj_nums=10, use_obj=True, use_so=False):
     
     relationship_location = get_relationship_location(locations)
 
@@ -12,7 +12,7 @@ def relation_net(locations, class_labels, relation_numbers=9, texture_num=5, use
 
     with tf.variable_scope('roi_pooling'):
         
-        x_u = roi_pooling(last_conv, relationship_location, 4, 4)
+        x_u = roi_pooling(last_conv, relationship_location, 7, 7)
         x_u = tf.reshape(x_u, [x_u.get_shape.as_list()[0], -1])
         x_u = tf.nn.relu(tf.slim.fully_connected(x_u, 4096))
         x_u = tf.nn.relu(tf.slim.fully_connected(x_u, 4096))
@@ -37,7 +37,8 @@ def relation_net(locations, class_labels, relation_numbers=9, texture_num=5, use
             emb_so =tf.slim.fully_connected(class_labels, 256)
 
         last = tf.concat([x_u, lo, emb_so], 1)
-        relation = tf.slim.fully_connected(last, relation_numbers)
+        relation = tf.slim.fully_connected(last, int((1+obj_nums)/2*obj_nums) * relation_numbers)
+        relation = tf.reshape(relation, [-1, int((1+obj_nums)/2*obj_nums), relation_numbers])
         
     return relation, texture
 
