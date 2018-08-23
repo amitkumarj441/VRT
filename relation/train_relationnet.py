@@ -92,6 +92,7 @@ def main():
     max_scale = 1000
     image_size = 608
     anchor_num = 9
+    obj_nums = 10
     
     num_feature_maps = 5
 
@@ -140,10 +141,10 @@ def main():
 
 
     input_image = tf.placeholder(tf.float32, [batch_size, image_size, image_size, 3])
-    label_class = tf.placeholder(tf.float32, [batch_size, 10, num_classes])
-    label_loc = tf.placeholder(tf.float32, [batch_size, 10, 4])
+    label_class = tf.placeholder(tf.float32, [batch_size, obj_nums, num_classes])
+    label_loc = tf.placeholder(tf.float32, [batch_size, obj_nums, 4])
     
-    label_relation = tf.placeholder(tf.float32, [batch_size, , 4])
+    label_relation = tf.placeholder(tf.float32, [batch_size, int((1+obj_nums)/2*obj_nums), 9])
 
     # setting network
     net = RetinaNet(input_image)
